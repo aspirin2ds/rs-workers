@@ -1,0 +1,20 @@
+{
+  "name": "@repo/db",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./schema": "./src/schema.ts"
+  },
+  "scripts": {
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply rs-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply rs-db --remote"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.10",
+    "wrangler": "^4.4.0"
+  }
+}

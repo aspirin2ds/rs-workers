@@ -1,0 +1,24 @@
+{
+  "name": "cf-better-auth",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --remote",
+    "deploy": "pnpm run cf-typegen && wrangler deploy --minify",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply cf-better-auth-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply cf-better-auth-db --remote",
+    "auth:schema": "pnpm dlx @better-auth/cli@latest generate --config ./better-auth.config.ts --output ./src/db/schema.ts"
+  },
+  "dependencies": {
+    "better-auth": "^1.5.6",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.9"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^6.0.2",
+    "wrangler": "^4.4.0"
+  }
+}

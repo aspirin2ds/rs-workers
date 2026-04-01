@@ -33,7 +33,7 @@ app.get("/api/me", async (c) => {
 });
 
 app.get("/", (c) => {
-  return c.text("cf-better-auth is running");
+  return c.text("Auth worker is running.");
 });
 
 export default app;

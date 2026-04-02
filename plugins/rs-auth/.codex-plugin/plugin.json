@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "description": "RS auth and admin tools via the deployed auth MCP server.",
   "author": {
-    "name": "RS"
+    "name": "RS",
+    "url": "https://github.com/aspirin2ds/rs-workers"
   },
   "homepage": "https://auth-worker.rollingsagas.com",
   "repository": "https://github.com/aspirin2ds/rs-workers",
@@ -27,7 +28,7 @@
       "Interactive",
       "Write"
     ],
-    "websiteURL": "https://rollingsgas.com",
+    "websiteURL": "https://rollingsagas.com",
     "privacyPolicyURL": "https://helps.rollingsagas.com/#/policies/privacy-policy",
     "termsOfServiceURL": "https://helps.rollingsagas.com/#/policies/terms-of-service",
     "defaultPrompt": [

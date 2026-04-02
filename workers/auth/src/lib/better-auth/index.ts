@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import { emailOTP } from "better-auth/plugins";
 import { admin } from "better-auth/plugins";
+import { bearer } from "better-auth/plugins";
 import { Resend } from "resend";
 import { betterAuthOptions } from "./options";
 
@@ -60,6 +61,7 @@ export const auth = (env: CloudflareBindings) => {
         },
       }),
       admin(),
+      bearer(),
     ],
   });
 };

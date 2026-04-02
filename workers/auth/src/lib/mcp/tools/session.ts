@@ -17,30 +17,58 @@ function getAuthProps() {
   return { userId, email, name, role, sessionToken };
 }
 
-function getSelfContext() {
-  const { userId, sessionToken } = getAuthProps();
-
-  if (!sessionToken) {
-    throw new Error("Missing MCP auth context");
-  }
-
-  return { userId, sessionToken };
-}
-
 export function registerSessionTools(
   server: McpServer,
   env: CloudflareBindings
 ) {
-  const authInstance = auth(env);
-
   server.registerTool(
-    "whoami",
+    "get-session",
     {
-      description: "Return the currently authenticated MCP user and session context",
+      description: "Return the current authenticated Better Auth session",
       inputSchema: {},
     },
     async () => {
       const props = getAuthProps();
+      if (!props.sessionToken) {
+        return {
+          content: [{ type: "text", text: "Missing session token in MCP auth context" }],
+        };
+      }
+
+      const session = await auth(env).api.getSession({
+        headers: new Headers({ Authorization: `Bearer ${props.sessionToken}` }),
+      });
+
+      if (!session) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  valid: false,
+                  reason: "Invalid or expired Better Auth session",
+                  detail:
+                    "MCP auth context token is not currently a valid Better Auth session token. get-session requires a live Better Auth session header/cookie context.",
+                  action:
+                    "Re-authenticate through your Better Auth web flow to obtain a fresh Better Auth session, or rely on MCP auth context for MCP-only authorization.",
+                  mcpContext: {
+                    user: {
+                      id: props.userId,
+                      email: props.email,
+                      name: props.name ?? null,
+                      role: props.role ?? "user",
+                    },
+                    session: { tokenPresent: true },
+                  },
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
 
       return {
         content: [
@@ -48,15 +76,18 @@ export function registerSessionTools(
             type: "text",
             text: JSON.stringify(
               {
-                user: {
-                  id: props.userId,
+                valid: true,
+                user: session.user,
+                session: {
+                  ...session.session,
+                  token: "[redacted]",
+                },
+                mcpContext: {
+                  userId: props.userId,
                   email: props.email,
                   name: props.name ?? null,
                   role: props.role ?? "user",
                 },
-                session: props.sessionToken
-                  ? { token: props.sessionToken }
-                  : null,
               },
               null,
               2

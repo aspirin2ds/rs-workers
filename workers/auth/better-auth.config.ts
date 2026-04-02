@@ -1,6 +1,6 @@
 /// <reference types="@types/node" />
 import { betterAuth } from "better-auth";
-import { emailOTP, admin } from "better-auth/plugins";
+import { emailOTP, admin, bearer } from "better-auth/plugins";
 import { betterAuthOptions } from "./src/lib/better-auth/options";
 
 const {
@@ -27,5 +27,6 @@ export const auth = betterAuth({
       sendVerificationOTP: async () => {},
     }),
     admin(),
+    bearer(),
   ],
 });

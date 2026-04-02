@@ -9,15 +9,12 @@ function createServer(env: CloudflareBindings) {
     version: "1.0.0",
   });
 
-  const authContext = getMcpAuthContext();
-
   // Session tools available to all authenticated users
   registerSessionTools(server, env);
 
-  // Admin tools only registered for admin users
-  if (authContext?.props?.role === "admin") {
-    registerAdminTools(server, env);
-  }
+  // Admin tools are always registered; each handler enforces admin auth.
+  // This avoids tool-discovery issues when auth context is unavailable during list.
+  registerAdminTools(server, env);
 
   return server;
 }

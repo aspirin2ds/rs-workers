@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: oklch(0.985 0.004 95);
+  --color-foreground: oklch(0.24 0.014 262);
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.24 0.014 262);
+  --color-primary: oklch(0.44 0.11 240);
+  --color-primary-foreground: oklch(0.985 0.004 95);
+  --color-muted: oklch(0.95 0.01 95);
+  --color-muted-foreground: oklch(0.47 0.014 255);
+  --color-accent: oklch(0.93 0.016 240);
+  --color-accent-foreground: oklch(0.24 0.014 262);
+  --color-border: oklch(0.89 0.01 95);
+  --color-input: oklch(0.89 0.01 95);
+  --color-ring: oklch(0.62 0.16 245);
+  --color-destructive: oklch(0.59 0.2 25);
+  --color-destructive-foreground: oklch(0.98 0 0);
+  --radius: 0.75rem;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@layer utilities {
+  html[data-auth-mode="otp"] [data-mode="password"] {
+    display: none;
+  }
+
+  html[data-auth-mode="password"] [data-mode="otp"] {
+    display: none;
+  }
+
+  html[data-auth-mode="password"] [data-tab="password"] {
+    @apply bg-background text-foreground shadow-sm;
+  }
+
+  html[data-auth-mode="password"] [data-tab="otp"] {
+    @apply text-muted-foreground;
+  }
+
+  html[data-auth-mode="otp"] [data-tab="otp"] {
+    @apply bg-background text-foreground shadow-sm;
+  }
+
+  html[data-auth-mode="otp"] [data-tab="password"] {
+    @apply text-muted-foreground;
+  }
+}

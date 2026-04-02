@@ -7,4 +7,10 @@ export const betterAuthOptions: BetterAuthOptions = {
     enabled: true,
     requireEmailVerification: true,
   },
+  socialProviders: {
+    google: {
+      clientId: "",
+      clientSecret: "",
+    },
+  },
 };

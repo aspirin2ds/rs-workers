@@ -1,7 +1,7 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "rs-auth",
-	"main": "src/index.ts",
+	"main": "src/index.tsx",
 	"compatibility_date": "2026-04-01",
 	"compatibility_flags": [
 		"nodejs_compat"
@@ -10,6 +10,13 @@
 		"enabled": true,
 		"head_sampling_rate": 1
 	},
+	"rules": [
+		{
+			"type": "Text",
+			"globs": ["**/*.css"],
+			"fallthrough": false
+		}
+	],
 	"d1_databases": [
 		{
 			"binding": "RS_DB",
@@ -21,6 +28,10 @@
 	"kv_namespaces": [
 		{
 			"binding": "RS_KV",
+			"id": "fc6103fd7bc14956941e026b56039d0c"
+		},
+		{
+			"binding": "OAUTH_KV",
 			"id": "fc6103fd7bc14956941e026b56039d0c"
 		}
 	]

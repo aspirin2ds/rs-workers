@@ -5,16 +5,28 @@ import { auth } from "../../better-auth";
 
 function getAdminContext() {
   const ctx = getMcpAuthContext();
+  const role = ctx?.props?.role as string | undefined;
   const sessionToken = ctx?.props?.sessionToken as string | undefined;
   const userId = ctx?.props?.userId as string | undefined;
 
   if (!sessionToken) {
     throw new Error("Missing admin session token");
   }
+  if (role !== "admin") {
+    throw new Error("Admin access required");
+  }
 
   return {
     headers: new Headers({ Authorization: `Bearer ${sessionToken}` }),
     userId,
+  };
+}
+
+function errorResult(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }],
+    isError: true as const,
   };
 }
 
@@ -44,67 +56,38 @@ export function registerAdminTools(
       .describe("Filter operator"),
   };
 
-  const listUsersHandler = async (params: {
-    searchValue?: string;
-    searchField?: "email" | "name";
-    searchOperator?: "contains" | "starts_with" | "ends_with";
-    limit?: number;
-    offset?: number;
-    sortBy?: string;
-    sortDirection?: "asc" | "desc";
-    filterField?: string;
-    filterValue?: string | number | boolean | string[] | number[];
-    filterOperator?:
-      | "eq"
-      | "ne"
-      | "lt"
-      | "lte"
-      | "gt"
-      | "gte"
-      | "in"
-      | "not_in"
-      | "contains"
-      | "starts_with"
-      | "ends_with";
-  }) => {
-    const { headers } = getAdminContext();
-    const result = await auth(env).api.listUsers({
-      headers,
-      query: {
-        searchValue: params.searchValue,
-        searchField: params.searchField,
-        searchOperator: params.searchOperator,
-        limit: params.limit,
-        offset: params.offset,
-        sortBy: params.sortBy,
-        sortDirection: params.sortDirection,
-        filterField: params.filterField,
-        filterValue: params.filterValue,
-        filterOperator: params.filterOperator,
-      },
-    });
-
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-    };
-  };
-
   server.registerTool(
     "list-users",
     {
       description: "List users with optional search/filter/pagination/sorting",
       inputSchema: listUsersInputSchema,
     },
-    listUsersHandler
-  );
+    async (params) => {
+      try {
+        const { headers } = getAdminContext();
+        const result = await auth(env).api.listUsers({
+          headers,
+          query: {
+            searchValue: params.searchValue,
+            searchField: params.searchField,
+            searchOperator: params.searchOperator,
+            limit: params.limit,
+            offset: params.offset,
+            sortBy: params.sortBy,
+            sortDirection: params.sortDirection,
+            filterField: params.filterField,
+            filterValue: params.filterValue,
+            filterOperator: params.filterOperator,
+          },
+        });
 
-  server.registerTool(
-    "list-user",
-    {
-      description: "Alias of list-users with optional search/filter/pagination/sorting",
-      inputSchema: listUsersInputSchema,
-    },
-    listUsersHandler
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return errorResult(err);
+      }
+    }
   );
 
   server.registerTool(
@@ -119,20 +102,24 @@ export function registerAdminTools(
       },
     },
     async (params) => {
-      const { headers } = getAdminContext();
-      const result = await auth(env).api.createUser({
-        headers,
-        body: {
-          email: params.email,
-          password: params.password,
-          name: params.name,
-          role: params.role ?? "user",
-        },
-      });
+      try {
+        const { headers } = getAdminContext();
+        const result = await auth(env).api.createUser({
+          headers,
+          body: {
+            email: params.email,
+            password: params.password,
+            name: params.name,
+            role: params.role ?? "user",
+          },
+        });
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return errorResult(err);
+      }
     }
   );
 
@@ -146,18 +133,22 @@ export function registerAdminTools(
       },
     },
     async ({ userId, role }) => {
-      const { headers, userId: adminUserId } = getAdminContext();
-      if (userId === adminUserId) {
-        throw new Error("Cannot modify your own role");
-      }
-      const result = await auth(env).api.setRole({
-        headers,
-        body: { userId, role },
-      });
+      try {
+        const { headers, userId: adminUserId } = getAdminContext();
+        if (userId === adminUserId) {
+          return errorResult(new Error("Cannot modify your own role"));
+        }
+        const result = await auth(env).api.setRole({
+          headers,
+          body: { userId, role },
+        });
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return errorResult(err);
+      }
     }
   );
 
@@ -175,22 +166,26 @@ export function registerAdminTools(
       },
     },
     async (params) => {
-      const { headers, userId: adminUserId } = getAdminContext();
-      if (params.userId === adminUserId) {
-        throw new Error("Cannot ban yourself");
-      }
-      const result = await auth(env).api.banUser({
-        headers,
-        body: {
-          userId: params.userId,
-          banReason: params.banReason,
-          banExpiresIn: params.banExpiresIn,
-        },
-      });
+      try {
+        const { headers, userId: adminUserId } = getAdminContext();
+        if (params.userId === adminUserId) {
+          return errorResult(new Error("Cannot ban yourself"));
+        }
+        const result = await auth(env).api.banUser({
+          headers,
+          body: {
+            userId: params.userId,
+            banReason: params.banReason,
+            banExpiresIn: params.banExpiresIn,
+          },
+        });
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return errorResult(err);
+      }
     }
   );
 
@@ -203,15 +198,19 @@ export function registerAdminTools(
       },
     },
     async ({ userId }) => {
-      const { headers } = getAdminContext();
-      const result = await auth(env).api.unbanUser({
-        headers,
-        body: { userId },
-      });
+      try {
+        const { headers } = getAdminContext();
+        const result = await auth(env).api.unbanUser({
+          headers,
+          body: { userId },
+        });
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return errorResult(err);
+      }
     }
   );
 
@@ -224,18 +223,22 @@ export function registerAdminTools(
       },
     },
     async ({ userId }) => {
-      const { headers, userId: adminUserId } = getAdminContext();
-      if (userId === adminUserId) {
-        throw new Error("Cannot delete yourself");
-      }
-      const result = await auth(env).api.removeUser({
-        headers,
-        body: { userId },
-      });
+      try {
+        const { headers, userId: adminUserId } = getAdminContext();
+        if (userId === adminUserId) {
+          return errorResult(new Error("Cannot delete yourself"));
+        }
+        const result = await auth(env).api.removeUser({
+          headers,
+          body: { userId },
+        });
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return errorResult(err);
+      }
     }
   );
 
@@ -248,15 +251,19 @@ export function registerAdminTools(
       },
     },
     async ({ sessionToken }) => {
-      const { headers } = getAdminContext();
-      const result = await auth(env).api.revokeSession({
-        headers,
-        body: { token: sessionToken },
-      });
+      try {
+        const { headers } = getAdminContext();
+        const result = await auth(env).api.revokeSession({
+          headers,
+          body: { token: sessionToken },
+        });
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return errorResult(err);
+      }
     }
   );
 
@@ -269,15 +276,19 @@ export function registerAdminTools(
       },
     },
     async ({ userId }) => {
-      const { headers } = getAdminContext();
-      const result = await auth(env).api.revokeUserSessions({
-        headers,
-        body: { userId },
-      });
+      try {
+        const { headers } = getAdminContext();
+        const result = await auth(env).api.revokeUserSessions({
+          headers,
+          body: { userId },
+        });
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return errorResult(err);
+      }
     }
   );
 }

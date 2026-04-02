@@ -1,4 +1,4 @@
-import { createMcpHandler, getMcpAuthContext } from "agents/mcp";
+import { createMcpHandler } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerSessionTools } from "./tools/session";
 import { registerAdminTools } from "./tools/admin";
@@ -12,8 +12,6 @@ function createServer(env: CloudflareBindings) {
   // Session tools available to all authenticated users
   registerSessionTools(server, env);
 
-  // Admin tools are always registered; each handler enforces admin auth.
-  // This avoids tool-discovery issues when auth context is unavailable during list.
   registerAdminTools(server, env);
 
   return server;

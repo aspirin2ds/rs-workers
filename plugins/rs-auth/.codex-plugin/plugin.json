@@ -1,9 +1,9 @@
 {
-  "name": "rs-auth",
+  "name": "rollingsagas",
   "version": "0.1.0",
-  "description": "RS auth and admin tools via the deployed auth MCP server.",
+  "description": "RollingSagas auth and admin tools via the deployed auth MCP server.",
   "author": {
-    "name": "RS",
+    "name": "RollingSagas",
     "url": "https://github.com/aspirin2ds/rs-workers"
   },
   "homepage": "https://auth-worker.rollingsagas.com",
@@ -20,9 +20,9 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "RS Auth",
-    "shortDescription": "Manage RS users, roles, bans, and sessions",
-    "longDescription": "Connect Codex to the RS auth worker MCP server for authenticated session inspection and user administration through the existing Better Auth and OAuth-backed MCP flow.",
-    "developerName": "RS",
+    "shortDescription": "Manage RollingSagas users, roles, bans, and sessions",
+    "longDescription": "Connect Codex to the RollingSagas auth worker MCP server for authenticated session inspection and user administration through the existing Better Auth and OAuth-backed MCP flow.",
+    "developerName": "RollingSagas",
     "category": "Coding",
     "capabilities": [
       "Interactive",

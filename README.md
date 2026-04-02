@@ -22,23 +22,23 @@ Authentication and authorization worker built with [Hono](https://hono.dev/), [B
 
 ### Codex plugin wrapper
 
-This repo now includes a repo-local Codex plugin wrapper for the auth MCP server at `plugins/rs-auth`.
+This repo now includes a repo-local Codex plugin wrapper for the auth MCP server at `plugins/rollingsagas`.
 
-- Plugin manifest: `plugins/rs-auth/.codex-plugin/plugin.json`
-- MCP registration: `plugins/rs-auth/.mcp.json`
-- Skill prompt layer: `plugins/rs-auth/skills/auth-admin/SKILL.md`
-- Slash commands: `plugins/rs-auth/commands/`
+- Plugin manifest: `plugins/rollingsagas/.codex-plugin/plugin.json`
+- MCP registration: `plugins/rollingsagas/.mcp.json`
+- Skills: `plugins/rollingsagas/skills/`
 - Marketplace entry: `.agents/plugins/marketplace.json`
 
 Before installing the plugin, replace the `https://[TODO: ...]` placeholders in the plugin manifest and MCP config with the deployed auth worker domain. The MCP endpoint should point at `/mcp`, which is already exposed by the auth worker's `OAuthProvider`.
 
-After reinstalling or reloading the plugin in Codex, slash commands are available with the plugin prefix, for example:
+After reinstalling or reloading the plugin in Codex, the plugin exposes MCP-backed skills for:
 
-- `/rs-auth:get-session`
-- `/rs-auth:list-users`
-- `/rs-auth:create-user alice@example.com | Alice | temp-password-123`
-- `/rs-auth:ban-user user_123 | abuse | 604800`
-- `/rs-auth:set-role user_123 | admin`
+- inspecting the current auth session
+- listing and searching RS users
+- creating users and changing roles
+- banning, unbanning, and revoking sessions
+
+The plugin is now skill-first rather than slash-command-first, which matches the structure used by Cloudflare's [`skills`](https://github.com/cloudflare/skills) repository.
 
 ### `packages/db`
 

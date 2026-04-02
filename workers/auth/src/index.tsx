@@ -92,14 +92,16 @@ function isTrustedClient(clientInfo: ClientInfo, env: CloudflareBindings): boole
 const CSP = [
   "default-src 'none'",
   "style-src 'unsafe-inline'",
-  "form-action 'self'",
+  "script-src 'unsafe-inline' https://static.cloudflareinsights.com",
+  "connect-src https://cloudflareinsights.com",
+  "form-action https: http:",
   "frame-ancestors 'none'",
   "base-uri 'self'",
-  "script-src 'unsafe-inline'",
 ].join("; ");
 
 function htmlWithCsrf(c: Context, props: Record<string, unknown> & { step: string }) {
-  const { token, setCookie } = generateCsrfToken();
+  const isSecure = new URL(c.req.url).protocol === "https:";
+  const { token, setCookie } = generateCsrfToken(isSecure);
   const body = renderPage({ ...props, csrfToken: token } as PageProps);
   return c.html(body, 200, {
     "Set-Cookie": setCookie,

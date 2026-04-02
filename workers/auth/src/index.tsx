@@ -5,9 +5,10 @@ import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provid
 import { eq, sql } from "drizzle-orm";
 import { user as userTable } from "@repo/db/schema";
 import { auth } from "./lib/better-auth";
+import { generateCsrfToken, validateCsrfToken } from "./lib/csrf";
 import { getDb } from "./lib/db";
 import { mcpApiHandler } from "./lib/mcp";
-import { renderPage } from "./ui/auth-page";
+import { renderPage, type PageProps } from "./ui/auth-page";
 
 type Bindings = CloudflareBindings & { OAUTH_PROVIDER: OAuthHelpers };
 type ClientInfo = { clientId: string; clientName?: string; clientUri?: string } | null;
@@ -16,12 +17,12 @@ type AuthSession = {
   session: { token: string };
 };
 
+type UserWithRole = { id: string; email: string; name: string | null; role?: string | null };
+
 const app = new Hono<{ Bindings: Bindings }>();
 
 function getBootstrapAdminEmail(env: CloudflareBindings): string | null {
-  const value = (env as unknown as Record<string, string | undefined>).BOOTSTRAP_ADMIN_EMAIL
-    ?.trim()
-    .toLowerCase();
+  const value = env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
   return value || null;
 }
 
@@ -88,6 +89,26 @@ function isTrustedClient(clientInfo: ClientInfo, env: CloudflareBindings): boole
   }
 }
 
+const CSP = [
+  "default-src 'none'",
+  "style-src 'unsafe-inline'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "script-src 'unsafe-inline'",
+].join("; ");
+
+function htmlWithCsrf(c: Context, props: Record<string, unknown> & { step: string }) {
+  const { token, setCookie } = generateCsrfToken();
+  const body = renderPage({ ...props, csrfToken: token } as PageProps);
+  return c.html(body, 200, {
+    "Set-Cookie": setCookie,
+    "Content-Security-Policy": CSP,
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+  });
+}
+
 app.use(
   "/api/auth/*",
   cors({
@@ -143,7 +164,7 @@ app.get("/authorize", async (c) => {
     return completeAuth(c, oauthReqInfo, await withBootstrapAdminRole(c.env, session));
   }
 
-  return c.html(renderPage({ step: "login", state, clientInfo }));
+  return htmlWithCsrf(c, { step: "login", state, clientInfo });
 });
 
 app.get("/authorize/resume", async (c) => {
@@ -166,13 +187,13 @@ app.get("/authorize/resume", async (c) => {
   });
 
   if (!session) {
-    return c.html(renderPage({ step: "login", state, clientInfo, error: "Google sign-in did not complete. Please try again." }));
+    return htmlWithCsrf(c, { step: "login", state, clientInfo, error: "Google sign-in did not complete. Please try again." });
   }
 
   const hydratedSession = await withBootstrapAdminRole(c.env, session);
 
   if (!isTrustedClient(clientInfo, c.env)) {
-    return c.html(renderPage({ step: "consent", state, clientInfo, user: hydratedSession.user }));
+    return htmlWithCsrf(c, { step: "consent", state, clientInfo, user: hydratedSession.user });
   }
 
   return completeAuth(c, oauthReqInfo, hydratedSession);
@@ -181,6 +202,13 @@ app.get("/authorize/resume", async (c) => {
 // OAuth authorize — handle form submissions
 app.post("/authorize", async (c) => {
   const formData = await c.req.formData();
+
+  try {
+    validateCsrfToken(formData, c.req.raw);
+  } catch {
+    return c.text("Invalid or missing CSRF token", 403);
+  }
+
   const state = formData.get("state") as string;
   const action = formData.get("action") as string;
 
@@ -199,19 +227,19 @@ app.post("/authorize", async (c) => {
 
   // --- Action: Show sign-up page ---
   if (action === "show-signup") {
-    return c.html(renderPage({ step: "signup", state, clientInfo }));
+    return htmlWithCsrf(c, { step: "signup", state, clientInfo });
   }
 
   // --- Action: Show login page ---
   if (action === "show-login") {
-    return c.html(renderPage({ step: "login", state, clientInfo }));
+    return htmlWithCsrf(c, { step: "login", state, clientInfo });
   }
 
   // --- Action: Send OTP (sign-in) ---
   if (action === "send-otp") {
     const email = (formData.get("email") as string)?.trim();
     if (!email) {
-      return c.html(renderPage({ step: "login", state, clientInfo, error: "Email is required" }));
+      return htmlWithCsrf(c, { step: "login", state, clientInfo, error: "Email is required" });
     }
 
     try {
@@ -219,10 +247,10 @@ app.post("/authorize", async (c) => {
         body: { email, type: "sign-in" },
       });
     } catch {
-      return c.html(renderPage({ step: "login", state, clientInfo, error: "Failed to send OTP. Please try again." }));
+      return htmlWithCsrf(c, { step: "login", state, clientInfo, error: "Failed to send OTP. Please try again." });
     }
 
-    return c.html(renderPage({ step: "otp", state, clientInfo, email }));
+    return htmlWithCsrf(c, { step: "otp", state, clientInfo, email });
   }
 
   // --- Action: Google sign-in ---
@@ -243,7 +271,7 @@ app.post("/authorize", async (c) => {
     const redirectURL = result.response?.url;
 
     if (!redirectURL) {
-      return c.html(renderPage({ step: "login", state, clientInfo, error: "Unable to start Google sign-in. Please try again." }));
+      return htmlWithCsrf(c, { step: "login", state, clientInfo, error: "Unable to start Google sign-in. Please try again." });
     }
 
     const headers = new Headers(result.headers);
@@ -261,7 +289,7 @@ app.post("/authorize", async (c) => {
     const name = (formData.get("name") as string)?.trim();
 
     if (!email || !name) {
-      return c.html(renderPage({ step: "signup", state, clientInfo, error: "Name and email are required" }));
+      return htmlWithCsrf(c, { step: "signup", state, clientInfo, error: "Name and email are required" });
     }
 
     try {
@@ -269,10 +297,10 @@ app.post("/authorize", async (c) => {
         body: { email, type: "sign-in" },
       });
     } catch {
-      return c.html(renderPage({ step: "signup", state, clientInfo, error: "Failed to send OTP. Please try again." }));
+      return htmlWithCsrf(c, { step: "signup", state, clientInfo, error: "Failed to send OTP. Please try again." });
     }
 
-    return c.html(renderPage({ step: "otp", state, clientInfo, email, name }));
+    return htmlWithCsrf(c, { step: "otp", state, clientInfo, email, name });
   }
 
   // --- Action: Verify OTP ---
@@ -282,7 +310,7 @@ app.post("/authorize", async (c) => {
     const name = (formData.get("name") as string) || undefined;
 
     if (!email || !otp) {
-      return c.html(renderPage({ step: "otp", state, clientInfo, email: email ?? "", name, error: "Please enter the code" }));
+      return htmlWithCsrf(c, { step: "otp", state, clientInfo, email: email ?? "", name, error: "Please enter the code" });
     }
 
     try {
@@ -291,7 +319,7 @@ app.post("/authorize", async (c) => {
       });
 
       if (!result?.token) {
-        return c.html(renderPage({ step: "otp", state, clientInfo, email, name, error: "Invalid or expired code" }));
+        return htmlWithCsrf(c, { step: "otp", state, clientInfo, email, name, error: "Invalid or expired code" });
       }
 
       // signInEmailOTP returns { token, user } directly — use it without a separate getSession call
@@ -300,12 +328,12 @@ app.post("/authorize", async (c) => {
           id: result.user.id,
           email: result.user.email,
           name: result.user.name,
-          role: (result.user as Record<string, unknown>).role as string | null ?? "user",
+          role: (result.user as UserWithRole).role ?? "user",
         },
         session: { token: result.token },
       }));
     } catch {
-      return c.html(renderPage({ step: "otp", state, clientInfo, email, name, error: "Invalid or expired code" }));
+      return htmlWithCsrf(c, { step: "otp", state, clientInfo, email, name, error: "Invalid or expired code" });
     }
   }
 
@@ -315,7 +343,7 @@ app.post("/authorize", async (c) => {
     const password = formData.get("password") as string;
 
     if (!email || !password) {
-      return c.html(renderPage({ step: "login", state, clientInfo, error: "Email and password are required" }));
+      return htmlWithCsrf(c, { step: "login", state, clientInfo, error: "Email and password are required" });
     }
 
     try {
@@ -324,7 +352,7 @@ app.post("/authorize", async (c) => {
       });
 
       if (!result?.token) {
-        return c.html(renderPage({ step: "login", state, clientInfo, error: "Invalid email or password" }));
+        return htmlWithCsrf(c, { step: "login", state, clientInfo, error: "Invalid email or password" });
       }
 
       return completeAuth(c, oauthReqInfo, await withBootstrapAdminRole(c.env, {
@@ -332,12 +360,12 @@ app.post("/authorize", async (c) => {
           id: result.user.id,
           email: result.user.email,
           name: result.user.name,
-          role: (result.user as Record<string, unknown>).role as string | null ?? "user",
+          role: (result.user as UserWithRole).role ?? "user",
         },
         session: { token: result.token },
       }));
     } catch {
-      return c.html(renderPage({ step: "login", state, clientInfo, error: "Invalid email or password" }));
+      return htmlWithCsrf(c, { step: "login", state, clientInfo, error: "Invalid email or password" });
     }
   }
 
@@ -348,7 +376,7 @@ app.post("/authorize", async (c) => {
     });
 
     if (!session) {
-      return c.html(renderPage({ step: "login", state, clientInfo, error: "Session expired. Please sign in again." }));
+      return htmlWithCsrf(c, { step: "login", state, clientInfo, error: "Session expired. Please sign in again." });
     }
 
     return completeAuth(c, oauthReqInfo, await withBootstrapAdminRole(c.env, session));

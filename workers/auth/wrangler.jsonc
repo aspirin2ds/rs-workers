@@ -8,7 +8,11 @@
 	],
 	"observability": {
 		"enabled": true,
-		"head_sampling_rate": 1
+		"head_sampling_rate": 1,
+		"traces": {
+			"enabled": true,
+			"head_sampling_rate": 0.01
+		}
 	},
 	"rules": [
 		{
@@ -25,7 +29,7 @@
 			"migrations_dir": "../../packages/db/drizzle"
 		}
 	],
-	"kv_namespaces": [
+"kv_namespaces": [
 		{
 			"binding": "RS_KV",
 			"id": "fc6103fd7bc14956941e026b56039d0c"

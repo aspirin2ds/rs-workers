@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "dev": "turbo dev",
-    "deploy": "turbo deploy",
+    "deploy": "turbo deploy:cf",
+    "deploy:auth": "pnpm --filter @repo/auth-worker deploy:cf",
     "typecheck": "turbo typecheck",
     "db:generate": "turbo db:generate",
     "db:migrate:local": "turbo db:migrate:local",

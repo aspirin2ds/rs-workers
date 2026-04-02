@@ -4,13 +4,14 @@ import styles from "../generated/styles.css";
 export type ClientInfo = { clientId: string; clientName?: string; clientUri?: string } | null;
 
 export type PageProps =
-  | { step: "login"; state: string; clientInfo: ClientInfo; error?: string }
-  | { step: "signup"; state: string; clientInfo: ClientInfo; error?: string }
-  | { step: "otp"; state: string; clientInfo: ClientInfo; email: string; name?: string; error?: string }
+  | { step: "login"; state: string; clientInfo: ClientInfo; csrfToken: string; error?: string }
+  | { step: "signup"; state: string; clientInfo: ClientInfo; csrfToken: string; error?: string }
+  | { step: "otp"; state: string; clientInfo: ClientInfo; csrfToken: string; email: string; name?: string; error?: string }
   | {
       step: "consent";
       state: string;
       clientInfo: ClientInfo;
+      csrfToken: string;
       user: { id: string; email: string; name: string | null; role?: string | null };
     };
 
@@ -32,10 +33,15 @@ const ErrorBanner: FC<{ error?: string }> = ({ error }) =>
     </div>
   ) : null;
 
-const HiddenStateFields: FC<{ state: string; action: string }> = ({ state, action }) => (
+const HiddenStateFields: FC<{ state: string; action: string; csrfToken: string }> = ({
+  state,
+  action,
+  csrfToken,
+}) => (
   <>
     <input type="hidden" name="state" value={state} />
     <input type="hidden" name="action" value={action} />
+    <input type="hidden" name="csrf_token" value={csrfToken} />
   </>
 );
 
@@ -151,9 +157,9 @@ const GoogleMark: FC = () => (
   </svg>
 );
 
-const GoogleButton: FC<{ state: string; label: string }> = ({ state, label }) => (
+const GoogleButton: FC<{ state: string; csrfToken: string; label: string }> = ({ state, csrfToken, label }) => (
   <form method="post" action="/authorize" class="w-full">
-    <HiddenStateFields state={state} action="google" />
+    <HiddenStateFields state={state} action="google" csrfToken={csrfToken} />
     <button
       type="submit"
       class="inline-flex h-11 w-full items-center justify-center gap-3 rounded-md border border-[#dadce0] bg-white px-4 text-[14px] font-medium text-[#3c4043] shadow-sm transition-colors hover:bg-[#f8f9fa] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8] focus-visible:ring-offset-2 focus-visible:ring-offset-background"
@@ -207,10 +213,10 @@ const AuthLayout: FC<
   </html>
 );
 
-const LoginView: FC<Extract<PageProps, { step: "login" }>> = ({ state, error }) => (
+const LoginView: FC<Extract<PageProps, { step: "login" }>> = ({ state, csrfToken, error }) => (
   <>
     <ErrorBanner error={error} />
-    <GoogleButton state={state} label="Sign in with Google" />
+    <GoogleButton state={state} csrfToken={csrfToken} label="Sign in with Google" />
     <Divider label="or continue with email" />
 
     <div class="grid gap-3">
@@ -234,7 +240,7 @@ const LoginView: FC<Extract<PageProps, { step: "login" }>> = ({ state, error }) 
       </div>
 
       <form method="post" action="/authorize" class="grid gap-4" data-mode="otp">
-        <HiddenStateFields state={state} action="send-otp" />
+        <HiddenStateFields state={state} action="send-otp" csrfToken={csrfToken} />
         <FormField id="otp-email" label="Email">
           <Input id="otp-email" name="email" type="email" required placeholder="you@example.com" autocomplete="email" />
         </FormField>
@@ -247,7 +253,7 @@ const LoginView: FC<Extract<PageProps, { step: "login" }>> = ({ state, error }) 
       </form>
 
       <form method="post" action="/authorize" class="grid gap-4" data-mode="password">
-        <HiddenStateFields state={state} action="password" />
+        <HiddenStateFields state={state} action="password" csrfToken={csrfToken} />
         <FormField id="pw-email" label="Email">
           <Input id="pw-email" name="email" type="email" required placeholder="you@example.com" autocomplete="email" />
         </FormField>
@@ -269,7 +275,7 @@ const LoginView: FC<Extract<PageProps, { step: "login" }>> = ({ state, error }) 
     </div>
 
     <form method="post" action="/authorize">
-      <HiddenStateFields state={state} action="show-signup" />
+      <HiddenStateFields state={state} action="show-signup" csrfToken={csrfToken} />
       <p class="text-center text-sm text-muted-foreground">
         Don&apos;t have an account?{" "}
         <button type="submit" class="font-medium text-foreground underline underline-offset-4">
@@ -282,14 +288,14 @@ const LoginView: FC<Extract<PageProps, { step: "login" }>> = ({ state, error }) 
   </>
 );
 
-const SignupView: FC<Extract<PageProps, { step: "signup" }>> = ({ state, error }) => (
+const SignupView: FC<Extract<PageProps, { step: "signup" }>> = ({ state, csrfToken, error }) => (
   <>
     <ErrorBanner error={error} />
-    <GoogleButton state={state} label="Sign up with Google" />
+    <GoogleButton state={state} csrfToken={csrfToken} label="Sign up with Google" />
     <Divider label="or create an account with email" />
 
     <form method="post" action="/authorize" class="grid gap-4">
-      <HiddenStateFields state={state} action="send-otp-signup" />
+      <HiddenStateFields state={state} action="send-otp-signup" csrfToken={csrfToken} />
       <FormField id="su-name" label="Display name">
         <Input id="su-name" name="name" required placeholder="Your name" autocomplete="name" />
       </FormField>
@@ -300,7 +306,7 @@ const SignupView: FC<Extract<PageProps, { step: "signup" }>> = ({ state, error }
     </form>
 
     <form method="post" action="/authorize">
-      <HiddenStateFields state={state} action="show-login" />
+      <HiddenStateFields state={state} action="show-login" csrfToken={csrfToken} />
       <p class="text-center text-sm text-muted-foreground">
         Already have an account?{" "}
         <button type="submit" class="font-medium text-foreground underline underline-offset-4">
@@ -311,7 +317,7 @@ const SignupView: FC<Extract<PageProps, { step: "signup" }>> = ({ state, error }
   </>
 );
 
-const OtpView: FC<Extract<PageProps, { step: "otp" }>> = ({ state, email, name, error }) => (
+const OtpView: FC<Extract<PageProps, { step: "otp" }>> = ({ state, csrfToken, email, name, error }) => (
   <>
     <ErrorBanner error={error} />
     <div class="rounded-xl border border-border/70 bg-muted/35 p-4 text-sm text-muted-foreground">
@@ -319,7 +325,7 @@ const OtpView: FC<Extract<PageProps, { step: "otp" }>> = ({ state, email, name, 
     </div>
 
     <form method="post" action="/authorize" class="grid gap-4">
-      <HiddenStateFields state={state} action="verify-otp" />
+      <HiddenStateFields state={state} action="verify-otp" csrfToken={csrfToken} />
       <input type="hidden" name="email" value={email} />
       {name ? <input type="hidden" name="name" value={name} /> : null}
       <FormField id="otp" label="Verification code">
@@ -343,7 +349,7 @@ const OtpView: FC<Extract<PageProps, { step: "otp" }>> = ({ state, email, name, 
     </form>
 
     <form method="post" action="/authorize">
-      <HiddenStateFields state={state} action={name ? "send-otp-signup" : "send-otp"} />
+      <HiddenStateFields state={state} action={name ? "send-otp-signup" : "send-otp"} csrfToken={csrfToken} />
       <input type="hidden" name="email" value={email} />
       {name ? <input type="hidden" name="name" value={name} /> : null}
       <p class="text-center text-sm text-muted-foreground">
@@ -358,6 +364,7 @@ const OtpView: FC<Extract<PageProps, { step: "otp" }>> = ({ state, email, name, 
 
 const ConsentView: FC<Extract<PageProps, { step: "consent" }> & { clientName: string }> = ({
   state,
+  csrfToken,
   user,
   clientName,
 }) => (
@@ -377,7 +384,7 @@ const ConsentView: FC<Extract<PageProps, { step: "consent" }> & { clientName: st
     </div>
 
     <form method="post" action="/authorize" class="grid gap-3">
-      <HiddenStateFields state={state} action="approve" />
+      <HiddenStateFields state={state} action="approve" csrfToken={csrfToken} />
       <Button type="submit">Approve access</Button>
       <Button type="button" variant="outline" onclick="window.close()">
         Deny

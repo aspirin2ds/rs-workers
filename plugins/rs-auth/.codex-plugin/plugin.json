@@ -28,8 +28,8 @@
       "Write"
     ],
     "websiteURL": "https://rollingsgas.com",
-    "privacyPolicyURL": "https://rollingsagas/privacy",
-    "termsOfServiceURL": "https://rollingsagas/terms",
+    "privacyPolicyURL": "https://helps.rollingsagas.com/#/policies/privacy-policy",
+    "termsOfServiceURL": "https://helps.rollingsagas.com/#/policies/terms-of-service",
     "defaultPrompt": [
       "List RS users and inspect auth state",
       "Create, ban, or change a user role in RS auth",

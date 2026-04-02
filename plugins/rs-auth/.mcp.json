@@ -2,7 +2,7 @@
   "mcpServers": {
     "rs-auth": {
       "type": "http",
-      "url": "https://[TODO: your-auth-domain]/mcp",
+      "url": "https://auth-worker.rollingsagas.com/mcp",
       "note": "RS auth MCP server. Uses the auth worker's OAuth flow on first connection."
     }
   }

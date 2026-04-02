@@ -27,9 +27,18 @@ This repo now includes a repo-local Codex plugin wrapper for the auth MCP server
 - Plugin manifest: `plugins/rs-auth/.codex-plugin/plugin.json`
 - MCP registration: `plugins/rs-auth/.mcp.json`
 - Skill prompt layer: `plugins/rs-auth/skills/auth-admin/SKILL.md`
+- Slash commands: `plugins/rs-auth/commands/`
 - Marketplace entry: `.agents/plugins/marketplace.json`
 
 Before installing the plugin, replace the `https://[TODO: ...]` placeholders in the plugin manifest and MCP config with the deployed auth worker domain. The MCP endpoint should point at `/mcp`, which is already exposed by the auth worker's `OAuthProvider`.
+
+After reinstalling or reloading the plugin in Codex, slash commands are available with the plugin prefix, for example:
+
+- `/rs-auth:get-session`
+- `/rs-auth:list-users`
+- `/rs-auth:create-user alice@example.com | Alice | temp-password-123`
+- `/rs-auth:ban-user user_123 | abuse | 604800`
+- `/rs-auth:set-role user_123 | admin`
 
 ### `packages/db`
 

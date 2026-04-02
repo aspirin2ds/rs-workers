@@ -2,7 +2,10 @@ import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provider";
+import { eq, sql } from "drizzle-orm";
+import { user as userTable } from "@repo/db/schema";
 import { auth } from "./lib/better-auth";
+import { getDb } from "./lib/db";
 import { mcpApiHandler } from "./lib/mcp";
 import { renderPage } from "./ui/auth-page";
 
@@ -14,6 +17,55 @@ type AuthSession = {
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
+
+function getBootstrapAdminEmail(env: CloudflareBindings): string | null {
+  const value = (env as unknown as Record<string, string | undefined>).BOOTSTRAP_ADMIN_EMAIL
+    ?.trim()
+    .toLowerCase();
+  return value || null;
+}
+
+async function promoteBootstrapAdminIfNeeded(
+  env: CloudflareBindings,
+  user: AuthSession["user"]
+): Promise<AuthSession["user"]> {
+  const db = getDb(env);
+  const bootstrapAdminEmail = getBootstrapAdminEmail(env);
+
+  if (!bootstrapAdminEmail || user.email.toLowerCase() !== bootstrapAdminEmail || user.role === "admin") {
+    return user;
+  }
+
+  const existingAdmin = await db
+    .select({ id: userTable.id })
+    .from(userTable)
+    .where(eq(userTable.role, "admin"))
+    .limit(1);
+
+  if (existingAdmin.length > 0) {
+    return user;
+  }
+
+  await db.run(sql`update "user" set "role" = 'admin' where "id" = ${user.id}`);
+
+  return { ...user, role: "admin" };
+}
+
+async function withBootstrapAdminRole(
+  env: CloudflareBindings,
+  session: AuthSession
+): Promise<AuthSession> {
+  const user = await promoteBootstrapAdminIfNeeded(env, session.user);
+
+  if (user.role === session.user.role) {
+    return session;
+  }
+
+  return {
+    ...session,
+    user,
+  };
+}
 
 function getAllowedOrigin(env: CloudflareBindings): string {
   return new URL(env.BETTER_AUTH_URL).origin;
@@ -64,7 +116,9 @@ app.get("/api/me", async (c) => {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
-  return c.json({ user: session.user });
+  const hydratedSession = await withBootstrapAdminRole(c.env, session);
+
+  return c.json({ user: hydratedSession.user });
 });
 
 // OAuth authorize — show login/consent page
@@ -86,7 +140,7 @@ app.get("/authorize", async (c) => {
   const state = btoa(JSON.stringify(oauthReqInfo));
 
   if (session && isTrustedClient(clientInfo, c.env)) {
-    return completeAuth(c, oauthReqInfo, session);
+    return completeAuth(c, oauthReqInfo, await withBootstrapAdminRole(c.env, session));
   }
 
   return c.html(renderPage({ step: "login", state, clientInfo }));
@@ -115,11 +169,13 @@ app.get("/authorize/resume", async (c) => {
     return c.html(renderPage({ step: "login", state, clientInfo, error: "Google sign-in did not complete. Please try again." }));
   }
 
+  const hydratedSession = await withBootstrapAdminRole(c.env, session);
+
   if (!isTrustedClient(clientInfo, c.env)) {
-    return c.html(renderPage({ step: "consent", state, clientInfo, user: session.user }));
+    return c.html(renderPage({ step: "consent", state, clientInfo, user: hydratedSession.user }));
   }
 
-  return completeAuth(c, oauthReqInfo, session);
+  return completeAuth(c, oauthReqInfo, hydratedSession);
 });
 
 // OAuth authorize — handle form submissions
@@ -239,7 +295,7 @@ app.post("/authorize", async (c) => {
       }
 
       // signInEmailOTP returns { token, user } directly — use it without a separate getSession call
-      return completeAuth(c, oauthReqInfo, {
+      return completeAuth(c, oauthReqInfo, await withBootstrapAdminRole(c.env, {
         user: {
           id: result.user.id,
           email: result.user.email,
@@ -247,7 +303,7 @@ app.post("/authorize", async (c) => {
           role: (result.user as Record<string, unknown>).role as string | null ?? "user",
         },
         session: { token: result.token },
-      });
+      }));
     } catch {
       return c.html(renderPage({ step: "otp", state, clientInfo, email, name, error: "Invalid or expired code" }));
     }
@@ -271,7 +327,7 @@ app.post("/authorize", async (c) => {
         return c.html(renderPage({ step: "login", state, clientInfo, error: "Invalid email or password" }));
       }
 
-      return completeAuth(c, oauthReqInfo, {
+      return completeAuth(c, oauthReqInfo, await withBootstrapAdminRole(c.env, {
         user: {
           id: result.user.id,
           email: result.user.email,
@@ -279,7 +335,7 @@ app.post("/authorize", async (c) => {
           role: (result.user as Record<string, unknown>).role as string | null ?? "user",
         },
         session: { token: result.token },
-      });
+      }));
     } catch {
       return c.html(renderPage({ step: "login", state, clientInfo, error: "Invalid email or password" }));
     }
@@ -295,7 +351,7 @@ app.post("/authorize", async (c) => {
       return c.html(renderPage({ step: "login", state, clientInfo, error: "Session expired. Please sign in again." }));
     }
 
-    return completeAuth(c, oauthReqInfo, session);
+    return completeAuth(c, oauthReqInfo, await withBootstrapAdminRole(c.env, session));
   }
 
   return c.text("Invalid action", 400);

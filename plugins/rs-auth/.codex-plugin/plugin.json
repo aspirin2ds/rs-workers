@@ -1,0 +1,41 @@
+{
+  "name": "rs-auth",
+  "version": "0.1.0",
+  "description": "RS auth and admin tools via the deployed auth MCP server.",
+  "author": {
+    "name": "RS"
+  },
+  "homepage": "https://auth-worker.rollingsagas.com",
+  "repository": "https://github.com/aspirin2ds/rs-workers",
+  "license": "MIT",
+  "keywords": [
+    "auth",
+    "mcp",
+    "better-auth",
+    "oauth",
+    "admin"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "RS Auth",
+    "shortDescription": "Manage RS users, roles, bans, and sessions",
+    "longDescription": "Connect Codex to the RS auth worker MCP server for authenticated session inspection and user administration through the existing Better Auth and OAuth-backed MCP flow.",
+    "developerName": "RS",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://rollingsgas.com",
+    "privacyPolicyURL": "https://rollingsagas/privacy",
+    "termsOfServiceURL": "https://rollingsagas/terms",
+    "defaultPrompt": [
+      "List RS users and inspect auth state",
+      "Create, ban, or change a user role in RS auth",
+      "Check my current RS auth session"
+    ],
+    "brandColor": "#2563EB",
+    "screenshots": []
+  }
+}

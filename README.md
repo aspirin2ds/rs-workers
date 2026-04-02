@@ -20,6 +20,17 @@ Authentication and authorization worker built with [Hono](https://hono.dev/), [B
 
 **Bindings:** Cloudflare D1 (`RS_DB`), KV (`RS_KV`, `OAUTH_KV`)
 
+### Codex plugin wrapper
+
+This repo now includes a repo-local Codex plugin wrapper for the auth MCP server at `plugins/rs-auth`.
+
+- Plugin manifest: `plugins/rs-auth/.codex-plugin/plugin.json`
+- MCP registration: `plugins/rs-auth/.mcp.json`
+- Skill prompt layer: `plugins/rs-auth/skills/auth-admin/SKILL.md`
+- Marketplace entry: `.agents/plugins/marketplace.json`
+
+Before installing the plugin, replace the `https://[TODO: ...]` placeholders in the plugin manifest and MCP config with the deployed auth worker domain. The MCP endpoint should point at `/mcp`, which is already exposed by the auth worker's `OAuthProvider`.
+
 ### `packages/db`
 
 Shared database schema and migrations using [Drizzle ORM](https://orm.drizzle.team/) with Cloudflare D1.

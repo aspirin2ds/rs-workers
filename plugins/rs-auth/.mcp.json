@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "rs-auth": {
+      "type": "http",
+      "url": "https://[TODO: your-auth-domain]/mcp",
+      "note": "RS auth MCP server. Uses the auth worker's OAuth flow on first connection."
+    }
+  }
+}

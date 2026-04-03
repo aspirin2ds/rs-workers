@@ -18,7 +18,7 @@ rs-workers/
 
 Authentication and authorization worker built with [Hono](https://hono.dev/), [Better Auth](https://www.better-auth.com/), and the [MCP SDK](https://modelcontextprotocol.io/). Provides OAuth, session management, and admin tools via MCP.
 
-**Bindings:** Cloudflare D1 (`RS_DB`), KV (`RS_KV`, `OAUTH_KV`)
+**Bindings:** Cloudflare D1 (`RS_DB`), KV (`KV`, `OAUTH_KV`)
 
 ### Codex plugin wrapper
 

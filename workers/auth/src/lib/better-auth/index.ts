@@ -23,13 +23,13 @@ export const auth = (env: CloudflareBindings) => {
       },
     },
     secondaryStorage: {
-      get: async (key) => await env.RS_KV.get(key),
+      get: async (key) => await env.KV.get(key),
       set: async (key, value, ttl) => {
-        await env.RS_KV.put(key, value, {
+        await env.KV.put(key, value, {
           expirationTtl: ttl ? Math.max(ttl, KV_MIN_TTL) : undefined,
         });
       },
-      delete: async (key) => await env.RS_KV.delete(key),
+      delete: async (key) => await env.KV.delete(key),
     },
     session: {
       cookieCache: {

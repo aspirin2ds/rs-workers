@@ -18,6 +18,13 @@
     "typecheck": {
       "dependsOn": ["^build", "cf-typegen"]
     },
+    "test": {
+      "dependsOn": ["^test"]
+    },
+    "test:watch": {
+      "cache": false,
+      "persistent": true
+    },
     "db:generate": {
       "cache": false
     },

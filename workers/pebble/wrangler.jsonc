@@ -23,7 +23,7 @@
   ],
   "kv_namespaces": [
     {
-      "binding": "OAUTH_KV",
+      "binding": "KV",
       "id": "fc6103fd7bc14956941e026b56039d0c"
     }
   ]

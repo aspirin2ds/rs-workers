@@ -53,17 +53,22 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
 
         await runLifeEngine(db, pet, now);
 
-        const uncollected = await db
-          .select()
-          .from(storyTable)
-          .where(and(eq(storyTable.petId, pet.id), eq(storyTable.collected, false)));
-
         const collectedItems: string[] = [];
-        const uncollectedIds: string[] = [];
-        const itemCounts = new Map<string, number>();
-        for (const entry of uncollected) {
-          uncollectedIds.push(entry.id);
-          if (entry.itemsFound) {
+        await db.transaction(async (tx) => {
+          const claimedStories = await tx
+            .update(storyTable)
+            .set({ collected: true })
+            .where(and(eq(storyTable.petId, pet.id), eq(storyTable.collected, false)))
+            .returning({
+              itemsFound: storyTable.itemsFound,
+            });
+
+          const itemCounts = new Map<string, number>();
+          for (const entry of claimedStories) {
+            if (!entry.itemsFound) {
+              continue;
+            }
+
             const items = JSON.parse(entry.itemsFound) as string[];
             for (const id of items) {
               const def = itemMap.get(id);
@@ -73,71 +78,60 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
               itemCounts.set(id, (itemCounts.get(id) ?? 0) + 1);
             }
           }
-        }
 
-        if (uncollectedIds.length > 0 || itemCounts.size > 0) {
-          await db.transaction(async (tx) => {
-            if (itemCounts.size > 0) {
-              const existingInventory = await tx
-                .select({
-                  id: inventoryTable.id,
-                  itemId: inventoryTable.itemId,
-                  quantity: inventoryTable.quantity,
-                })
-                .from(inventoryTable)
-                .where(eq(inventoryTable.petId, pet.id));
+          if (itemCounts.size > 0) {
+            const existingInventory = await tx
+              .select({
+                id: inventoryTable.id,
+                itemId: inventoryTable.itemId,
+                quantity: inventoryTable.quantity,
+              })
+              .from(inventoryTable)
+              .where(eq(inventoryTable.petId, pet.id));
 
-              const existingMap = new Map(
-                existingInventory.map((inventory) => [inventory.itemId, inventory])
-              );
+            const existingMap = new Map(
+              existingInventory.map((inventory) => [inventory.itemId, inventory])
+            );
 
-              const inserts: Array<{
-                id: string;
-                petId: string;
-                itemId: string;
-                quantity: number;
-              }> = [];
-              const updates: Array<{ id: string; quantity: number }> = [];
+            const inserts: Array<{
+              id: string;
+              petId: string;
+              itemId: string;
+              quantity: number;
+            }> = [];
+            const updates: Array<{ id: string; quantity: number }> = [];
 
-              for (const [itemId, count] of itemCounts) {
-                const existing = existingMap.get(itemId);
-                if (existing) {
-                  updates.push({ id: existing.id, quantity: existing.quantity + count });
-                } else {
-                  inserts.push({
-                    id: crypto.randomUUID(),
-                    petId: pet.id,
-                    itemId,
-                    quantity: count,
-                  });
-                }
-              }
-
-              if (inserts.length > 0) {
-                await tx.insert(inventoryTable).values(inserts);
-              }
-
-              for (const update of updates) {
-                await tx
-                  .update(inventoryTable)
-                  .set({ quantity: update.quantity })
-                  .where(eq(inventoryTable.id, update.id));
+            for (const [itemId, count] of itemCounts) {
+              const existing = existingMap.get(itemId);
+              if (existing) {
+                updates.push({ id: existing.id, quantity: existing.quantity + count });
+              } else {
+                inserts.push({
+                  id: crypto.randomUUID(),
+                  petId: pet.id,
+                  itemId,
+                  quantity: count,
+                });
               }
             }
 
-            for (const id of uncollectedIds) {
+            if (inserts.length > 0) {
+              await tx.insert(inventoryTable).values(inserts);
+            }
+
+            for (const update of updates) {
               await tx
-                .update(storyTable)
-                .set({ collected: true })
-                .where(eq(storyTable.id, id));
+                .update(inventoryTable)
+                .set({ quantity: update.quantity })
+                .where(eq(inventoryTable.id, update.id));
             }
-          });
-        }
+          }
 
-        await db
-          .update(petTable)
-          .set({ lastCheckedAt: new Date(now) })
-          .where(eq(petTable.id, pet.id));
+          await tx
+            .update(petTable)
+            .set({ lastCheckedAt: new Date(now) })
+            .where(eq(petTable.id, pet.id));
+        });
 
         const recentStories = await db
           .select()

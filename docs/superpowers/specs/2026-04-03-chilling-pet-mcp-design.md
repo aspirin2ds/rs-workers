@@ -1,6 +1,6 @@
-# Chilling Pet MCP Server — Design Spec
+# Pebble MCP Server — Design Spec
 
-A cozy virtual pet MCP server running on Cloudflare Workers. Inspired by Travel Frog — an idle game where your pet lives its own life, goes on trips, and sends back stories. You prepare its pack, buy items from the shop, and check in through a feed.
+A cozy virtual pet MCP server running on Cloudflare Workers. Inspired by Travel Frog — an idle game where your pet lives its own life, goes on trips, and sends back stories. You prepare its pack and check in through a feed.
 
 ## Architecture
 
@@ -8,9 +8,10 @@ A cozy virtual pet MCP server running on Cloudflare Workers. Inspired by Travel 
 
 No background processing. When the player checks in via the `feed` tool, the **Life Engine** computes what the pet has been doing since the last check. This is deterministic — the same check at the same time always produces the same history.
 
-### Worker: `workers/pet`
+### Worker: `workers/pebble`
 
 A new worker in the monorepo following the same patterns as `workers/auth`:
+
 - **Hono** for HTTP routing
 - **@modelcontextprotocol/sdk + agents** for MCP server
 - **D1** (shared `rs-db` database) via **Drizzle ORM**
@@ -23,20 +24,19 @@ Future chat API endpoints will be added to the same worker (deferred — not in 
 
 | Tool | Description |
 |---|---|
-| `adopt` | Create your pet. Choose a name. Generates unique ASCII art and random personality traits via Workers AI. One pet per user. |
-| `feed` | Main interaction — "open the app." Returns: pet status (home or traveling), home ASCII scene, collects pending rewards (fish catches, trip souvenirs, coins), and the story feed of recent activities. Triggers Life Engine computation. |
+| `adopt` | Create your pet. Choose a name. Generates unique ASCII art and random personality traits via Workers AI. One pet per player. |
+| `feed` | Main interaction — "open the app." Triggers Life Engine computation, returns the story feed of all events since last check. Each event with items is collectible — calling `feed` collects pending rewards and shows new events. Also shows current pet status (home or traveling). |
 | `pack` | Set out items from inventory for the pet's next trip. The pet chooses from the pack based on its personality when it departs. |
-| `shop` | Browse and buy items (food, tools, charms) with coins. |
-| `items` | View inventory — owned items and coin balance. |
+| `item` | View inventory — owned items. |
 
 ## Data Model
 
-### `pets` table
+### `pet` table
 
 | Column | Type | Description |
 |---|---|---|
 | `id` | text PK | Unique pet ID |
-| `user_id` | text FK → user | Owner |
+| `player_id` | text FK → player | Owner |
 | `name` | text | Player-chosen name |
 | `seed` | integer | Random seed for deterministic life simulation |
 | `ascii_art` | text | Unique ASCII art (generated at adoption) |
@@ -46,12 +46,11 @@ Future chat API endpoints will be added to the same worker (deferred — not in 
 | `courage` | integer (0-100) | Visits rare/far locations vs. stays close |
 | `creativity` | integer (0-100) | Tendency to craft or create souvenirs |
 | `last_checked_at` | integer | Timestamp of last feed check (compute-from marker) |
-| `coins` | integer | Coin balance (default 0) |
 | `created_at` | integer | Birth timestamp |
 
 Personality traits are randomly rolled at adoption and immutable. They directly weight the Life Engine's activity probability distribution.
 
-### `items` table (catalog)
+### `item` table (catalog)
 
 | Column | Type | Description |
 |---|---|---|
@@ -62,10 +61,9 @@ Personality traits are randomly rolled at adoption and immutable. They directly 
 | `category` | text | `food`, `tool`, `charm`, `souvenir` |
 | `effect_target` | text nullable | Which personality trait it modifies |
 | `effect_strength` | integer nullable | How much it shifts the trait |
-| `shop_price` | integer nullable | Coin cost (null = not sold in shop) |
 | `rarity` | text | `common`, `uncommon`, `rare` |
 
-### `pet_inventory` table
+### `inventory` table
 
 | Column | Type | Description |
 |---|---|---|
@@ -74,9 +72,7 @@ Personality traits are randomly rolled at adoption and immutable. They directly 
 | `item_id` | text FK → items | Item |
 | `quantity` | integer | How many owned |
 
-Coin balance is stored on `pets.coins`.
-
-### `pet_pack` table
+### `pack` table
 
 | Column | Type | Description |
 |---|---|---|
@@ -86,31 +82,22 @@ Coin balance is stored on `pets.coins`.
 
 When the pet departs, it selects from the pack based on personality. Consumed items are removed.
 
-### `activity_log` table
+### `story` table
 
 | Column | Type | Description |
 |---|---|---|
 | `id` | text PK | Row ID |
 | `pet_id` | text FK → pets | The pet |
 | `time_window` | integer | Which 30-min slot (timestamp) |
-| `activity_type` | text | `sleeping`, `eating`, `wandering`, `traveling`, `fishing`, `crafting`, etc. |
+| `activity_type` | text | `sleeping`, `eating`, `wandering`, `traveling`, `crafting`, etc. |
 | `location` | text nullable | Where the pet is (null = home) |
 | `story` | text nullable | Workers AI narrative (cached after generation) |
 | `encountered_pet_id` | text nullable FK → pets | Another pet met at this location |
 | `items_found` | text nullable | JSON array of item IDs found/crafted |
+| `collected` | integer | 0 = rewards pending, 1 = collected by player |
 | `created_at` | integer | When this log was computed |
 
 This is a write-behind cache. Entries are computed on `feed` and stored so they don't need recomputation.
-
-### `fishing_state` table
-
-| Column | Type | Description |
-|---|---|---|
-| `pet_id` | text FK → pets | Owner pet |
-| `last_fished_at` | integer | Last fishing timestamp |
-| `pending_catches` | text | JSON array of uncollected catches (item IDs + coins) |
-
-Fishing catches accumulate over time. Collected via `feed`.
 
 ## Life Engine
 
@@ -118,7 +105,7 @@ The core simulation algorithm, triggered by `feed`:
 
 ```
 1. Read pet.last_checked_at → compute elapsed time to now
-2. Divide elapsed time into 30-minute time windows
+2. Divide elapsed time into 20-minute time windows
 3. For each window:
    a. Seed RNG: hash(pet.seed, window_timestamp)
    b. Read pack items → compute temporary trait modifiers
@@ -131,9 +118,8 @@ The core simulation algorithm, triggered by `feed`:
       location in the same window → passive encounter
    f. If traveling: determine items found based on location + traits
    g. If creative enough: chance to craft an item
-4. Store computed activities in activity_log
-5. Compute pending fishing catches since last_fished_at
-6. Generate story feed via Workers AI (batch the recent activities into a narrative)
+4. Store computed activities in stories
+5. Generate story feed via Workers AI (batch the recent activities into a narrative)
 7. Update pet.last_checked_at to now
 8. Return: current state, story feed, new items, pending rewards
 ```
@@ -141,6 +127,7 @@ The core simulation algorithm, triggered by `feed`:
 ### Deterministic RNG
 
 All randomness is seeded by `hash(pet.seed, time_window)`. This means:
+
 - The same pet always does the same thing in the same time window
 - No background processing needed
 - State can be recomputed if the cache is lost
@@ -149,7 +136,7 @@ All randomness is seeded by `hash(pet.seed, time_window)`. This means:
 
 When computing a pet's activities, check other pets' computed locations for the same time window. If locations match, it's a passive encounter. Since RNG is deterministic, both owners will see the same encounter when they each check in.
 
-For performance: only check pets that have overlapping travel windows. Index `activity_log` on `(time_window, location)`.
+For performance: only check pets that have overlapping travel windows. Index `story` on `(time_window, location)`.
 
 ### Trip Lifecycle
 
@@ -157,24 +144,26 @@ For performance: only check pets that have overlapping travel windows. Index `ac
 2. Pet departs → selects items from pack (personality-driven), pack items consumed
 3. Pet travels for N windows (duration based on energy + items taken)
 4. During trip: visits locations, may encounter other pets, finds items
-5. Pet returns home → souvenirs + coins + stories added to inventory/feed
-
-### Fishing
-
-Passive resource generation. Between `feed` checks, catches accumulate:
-- Catch rate: one attempt per hour
-- Results: common items, coins, occasionally uncommon items
-- Collected automatically when player calls `feed`
+5. Pet returns home → souvenirs + stories added to inventory/feed
 
 ## Story Feed
 
-The `feed` tool returns a chronological list of recent activities as short stories. Workers AI generates cozy, personality-flavored narratives:
+Every event in the pet's life becomes a story entry pushed to the feed: departures, arrivals, encounters, crafting, returns home. The feed is a chronological log of everything that happened.
+
+When the player calls `feed`:
+
+1. Life Engine computes all events since last check
+2. Each event becomes a feed entry with a Workers AI narrative
+3. Events that yielded items show as **collectible** — the player must call `feed` to claim them
+4. Uncollected rewards stay in the feed until collected
+
+Example feed entries:
 
 - "Your pet curled up by the window and watched the rain for a while."
-- "Took the compass you packed and wandered to the Crystal Caves. Found a shiny pebble."
+- "Took the compass you packed and wandered to the Crystal Caves. Found a shiny pebble." **[Collect: Shiny Pebble]**
 - "Met a wispy creature at the Moonlit Library. They sat together in comfortable silence."
 
-Stories are cached in `activity_log.story` after first generation.
+Stories are cached in `stories.story` after first generation. Collectible items are tracked via `stories.collected` (boolean, default false).
 
 ## ASCII Art
 
@@ -190,7 +179,7 @@ Reuse the existing OAuth flow from `workers/auth`. The pet worker registers as a
 ## Project Structure
 
 ```
-workers/pet/
+workers/pebble/
   src/
     index.ts              — Hono app + OAuthProvider wrapper
     lib/
@@ -200,14 +189,12 @@ workers/pet/
           adopt.ts        — adopt tool
           feed.ts         — feed tool (main interaction)
           pack.ts         — pack tool
-          shop.ts         — shop tool
           items.ts        — items tool
       engine/
         life-engine.ts    — core simulation logic
         rng.ts            — deterministic seeded RNG
         activities.ts     — activity types, weights, locations
         encounters.ts     — passive encounter detection
-        fishing.ts        — fishing catch computation
       ai/
         stories.ts        — Workers AI story generation
         ascii.ts          — Workers AI ASCII art generation
@@ -229,7 +216,7 @@ packages/db/
 
 ```jsonc
 {
-  "name": "rs-pet",
+  "name": "rs-pebble",
   "main": "src/index.ts",
   "compatibility_flags": ["nodejs_compat"],
   "d1_databases": [
@@ -255,16 +242,18 @@ packages/db/
 ## Scope Boundaries
 
 ### In scope (initial build)
-- 5 MCP tools: adopt, feed, pack, shop, items
+
+- 4 MCP tools: adopt, feed, pack, items
 - Life Engine with lazy evaluation
 - Deterministic pet behavior driven by personality traits
 - Passive encounters between pets
 - Story feed via Workers AI
 - ASCII art generation
-- Item system: shop, pack, souvenirs, fishing
+- Item system: pack, souvenirs
 - OAuth authentication via existing rs-auth
 
 ### Deferred
+
 - Chat API (REST endpoints for non-MCP clients)
 - Home decoration system
 - Visit other users' pets

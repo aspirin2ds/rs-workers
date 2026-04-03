@@ -15,6 +15,13 @@
       "when": 1775050873472,
       "tag": "0001_dusty_maestro",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1775209061737,
+      "tag": "0002_normal_synch",
+      "breakpoints": true
     }
   ]
 }

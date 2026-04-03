@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rs-pebble",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-01",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "placement": {
+    "mode": "smart"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "d1_databases": [
+    {
+      "binding": "RS_DB",
+      "database_name": "rs-db",
+      "database_id": "c7f23ce6-2d7e-4c07-8f9a-cc8f796f21db",
+      "migrations_dir": "../../packages/db/drizzle"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "fc6103fd7bc14956941e026b56039d0c"
+    }
+  ]
+}

@@ -117,6 +117,9 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "placement": {
+    "mode": "smart"
+  },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
@@ -290,7 +293,7 @@ export const inventory = sqliteTable("inventory", {
     .references(() => item.id),
   quantity: integer("quantity").notNull().default(1),
 }, (table) => [
-  index("inventory_petId_idx").on(table.petId),
+  index("inventory_petId_itemId_idx").on(table.petId, table.itemId),
 ]);
 
 export const pack = sqliteTable("pack", {
@@ -303,7 +306,7 @@ export const pack = sqliteTable("pack", {
     .references(() => item.id),
   quantity: integer("quantity").notNull().default(1),
 }, (table) => [
-  index("pack_petId_idx").on(table.petId),
+  index("pack_petId_itemId_idx").on(table.petId, table.itemId),
 ]);
 
 export const story = sqliteTable("story", {
@@ -941,48 +944,70 @@ git commit -m "feat(pebble): add item catalog with travel items and souvenirs"
 - [ ] **Step 1: Create `workers/pebble/src/lib/engine/encounters.ts`**
 
 ```ts
-import { eq, and } from "drizzle-orm";
+import { and, inArray } from "drizzle-orm";
 import { story as storyTable } from "@repo/db/schema";
-import type { D1Database } from "@cloudflare/workers-types";
 import { drizzle } from "drizzle-orm/d1";
+import { sql } from "drizzle-orm";
+
+interface EncounterQuery {
+  timeWindow: number;
+  location: string;
+}
 
 /**
- * Check if any other pet was at the given location in the given time window.
- * Returns the encountered pet's ID, or null.
+ * Batch encounter detection — single query for all (timeWindow, location) pairs.
+ * Returns a map from "timeWindow:location" to encountered pet ID.
  */
-export async function findEncounter(
+export async function findEncountersBatch(
   db: ReturnType<typeof drizzle>,
-  timeWindow: number,
-  location: string,
+  queries: EncounterQuery[],
   excludePetId: string
-): Promise<string | null> {
-  const result = await db
-    .select({ petId: storyTable.petId })
+): Promise<Map<string, string>> {
+  if (queries.length === 0) return new Map();
+
+  // Get unique time windows to query
+  const timeWindows = [...new Set(queries.map((q) => q.timeWindow))];
+  const locationSet = new Set(queries.map((q) => q.location));
+
+  const results = await db
+    .select({
+      petId: storyTable.petId,
+      timeWindow: storyTable.timeWindow,
+      location: storyTable.location,
+    })
     .from(storyTable)
     .where(
       and(
-        eq(storyTable.timeWindow, timeWindow),
-        eq(storyTable.location, location)
+        inArray(storyTable.timeWindow, timeWindows),
+        inArray(storyTable.location, [...locationSet])
       )
-    )
-    .limit(5);
+    );
 
-  const other = result.find((r) => r.petId !== excludePetId);
-  return other?.petId ?? null;
+  const encounterMap = new Map<string, string>();
+  for (const r of results) {
+    if (r.petId !== excludePetId && r.location) {
+      const key = `${r.timeWindow}:${r.location}`;
+      if (!encounterMap.has(key)) {
+        encounterMap.set(key, r.petId);
+      }
+    }
+  }
+
+  return encounterMap;
 }
 ```
 
 - [ ] **Step 2: Create `workers/pebble/src/lib/engine/life-engine.ts`**
 
 ```ts
-import { eq, and, gte } from "drizzle-orm";
+import { eq, and, gte, desc, sql } from "drizzle-orm";
 import { pet as petTable, story as storyTable, pack as packTable, item as itemTable, inventory as inventoryTable } from "@repo/db/schema";
 import { drizzle } from "drizzle-orm/d1";
 import { SeededRng, makeWindowSeed } from "./rng";
 import { computeHomeActivityWeights, shouldDepart, pickTripDuration, pickDestination, shouldFindItem, shouldCraftItem } from "./activities";
-import { findEncounter } from "./encounters";
+import { findEncountersBatch } from "./encounters";
 import { WINDOW_MINUTES } from "../../data/activities";
-import { itemMap } from "../../data/items";
+import { locations } from "../../data/locations";
 import type { Location } from "../../data/locations";
 
 const WINDOW_MS = WINDOW_MINUTES * 60 * 1000;
@@ -996,13 +1021,6 @@ interface PetRow {
   courage: number;
   creativity: number;
   lastCheckedAt: Date;
-}
-
-interface PackItem {
-  itemId: string;
-  quantity: number;
-  effectTarget: string | null;
-  effectStrength: number | null;
 }
 
 export interface ComputedStory {
@@ -1095,6 +1113,7 @@ export async function runLifeEngine(
   }
 
   // Determine initial state: check last story to see if pet was traveling
+  // NOTE: desc() to get the NEWEST story, not oldest
   const lastStory = await db
     .select({
       activityType: storyTable.activityType,
@@ -1102,7 +1121,7 @@ export async function runLifeEngine(
     })
     .from(storyTable)
     .where(eq(storyTable.petId, pet.id))
-    .orderBy(storyTable.timeWindow)
+    .orderBy(desc(storyTable.timeWindow))
     .limit(1);
 
   const state: SimState = {
@@ -1111,13 +1130,15 @@ export async function runLifeEngine(
     currentLocation: null,
   };
 
-  if (state.traveling) {
-    // Rough estimate — we don't know exact remaining windows
+  if (state.traveling && lastStory[0]?.location) {
     state.tripWindowsLeft = 3;
+    // Resolve location object from name
+    state.currentLocation = locations.find((l) => l.name === lastStory[0].location) ?? null;
   }
 
   const newStories: ComputedStory[] = [];
 
+  // --- Phase 1: Compute all activities (no DB calls in loop) ---
   for (const window of windowsToProcess) {
     if (existingSet.has(window)) continue;
 
@@ -1129,7 +1150,6 @@ export async function runLifeEngine(
       state.tripWindowsLeft--;
 
       if (state.tripWindowsLeft <= 0) {
-        // Pet returns home
         entry = {
           petId: pet.id,
           timeWindow: window,
@@ -1141,25 +1161,15 @@ export async function runLifeEngine(
         state.traveling = false;
         state.currentLocation = null;
       } else {
-        // Pet is exploring at destination
         const loc = state.currentLocation!;
-        let encounteredPetId: string | null = null;
         let itemsFound: string[] | null = null;
 
-        // Check for encounter
-        if (rng.next() < traits.sociability / 200) {
-          encounteredPetId = await findEncounter(db, window, loc.id, pet.id);
-        }
-
-        // Check for item find
         if (shouldFindItem(rng, traits) && loc.souvenirIds.length > 0) {
           const foundId = rng.pick(loc.souvenirIds);
           itemsFound = [foundId];
         }
 
-        // Check for crafting
         if (shouldCraftItem(rng, traits)) {
-          // Crafted items are random souvenirs
           const craftedId = rng.pick(loc.souvenirIds);
           itemsFound = itemsFound ? [...itemsFound, craftedId] : [craftedId];
         }
@@ -1169,12 +1179,12 @@ export async function runLifeEngine(
           timeWindow: window,
           activityType: "exploring",
           location: loc.name,
-          encounteredPetId,
+          // Encounter resolved in phase 2 below
+          encounteredPetId: null,
           itemsFound: itemsFound && itemsFound.length > 0 ? itemsFound : null,
         };
       }
     } else {
-      // Pet is home — check if it should depart
       if (shouldDepart(rng, traits, hasPackItems)) {
         const destination = pickDestination(rng, traits);
         const duration = pickTripDuration(rng, traits);
@@ -1183,7 +1193,6 @@ export async function runLifeEngine(
         state.tripWindowsLeft = duration;
         state.currentLocation = destination;
 
-        // Consume pack items
         if (hasPackItems) {
           await db.delete(packTable).where(eq(packTable.petId, pet.id));
         }
@@ -1197,7 +1206,6 @@ export async function runLifeEngine(
           itemsFound: null,
         };
       } else {
-        // Home activity
         const { activities, weights } = computeHomeActivityWeights(traits);
         const activity = rng.weightedPick(activities, weights);
 
@@ -1215,12 +1223,26 @@ export async function runLifeEngine(
     newStories.push(entry);
   }
 
-  // Batch insert new stories
+  // --- Phase 2: Batch encounter detection (single DB query) ---
+  const encounterQueries = newStories
+    .filter((s) => s.activityType === "exploring" && s.location)
+    .map((s) => ({ timeWindow: s.timeWindow, location: s.location! }));
+
+  if (encounterQueries.length > 0) {
+    const encounterMap = await findEncountersBatch(db, encounterQueries, pet.id);
+    for (const s of newStories) {
+      if (s.activityType === "exploring" && s.location) {
+        const key = `${s.timeWindow}:${s.location}`;
+        s.encounteredPetId = encounterMap.get(key) ?? null;
+      }
+    }
+  }
+
+  // --- Phase 3: Batch insert stories + batch update inventory ---
   if (newStories.length > 0) {
-    const ids = newStories.map((_, i) => crypto.randomUUID());
     await db.insert(storyTable).values(
-      newStories.map((s, i) => ({
-        id: ids[i],
+      newStories.map((s) => ({
+        id: crypto.randomUUID(),
         petId: s.petId,
         timeWindow: s.timeWindow,
         activityType: s.activityType,
@@ -1231,34 +1253,41 @@ export async function runLifeEngine(
       }))
     );
 
-    // Add found items to inventory
+    // Collect all found items into a count map, then batch upsert
+    const itemCounts = new Map<string, number>();
     for (const s of newStories) {
       if (!s.itemsFound) continue;
-      for (const foundItemId of s.itemsFound) {
-        const existing = await db
-          .select({ id: inventoryTable.id, quantity: inventoryTable.quantity })
-          .from(inventoryTable)
-          .where(
-            and(
-              eq(inventoryTable.petId, pet.id),
-              eq(inventoryTable.itemId, foundItemId)
-            )
-          )
-          .limit(1);
+      for (const itemId of s.itemsFound) {
+        itemCounts.set(itemId, (itemCounts.get(itemId) ?? 0) + 1);
+      }
+    }
 
-        if (existing.length > 0) {
-          await db
-            .update(inventoryTable)
-            .set({ quantity: existing[0].quantity + 1 })
-            .where(eq(inventoryTable.id, existing[0].id));
+    if (itemCounts.size > 0) {
+      // Load existing inventory for this pet in one query
+      const existingInv = await db
+        .select({ id: inventoryTable.id, itemId: inventoryTable.itemId, quantity: inventoryTable.quantity })
+        .from(inventoryTable)
+        .where(eq(inventoryTable.petId, pet.id));
+
+      const existingMap = new Map(existingInv.map((r) => [r.itemId, r]));
+
+      const inserts: Array<{ id: string; petId: string; itemId: string; quantity: number }> = [];
+      const updates: Array<{ id: string; quantity: number }> = [];
+
+      for (const [itemId, count] of itemCounts) {
+        const existing = existingMap.get(itemId);
+        if (existing) {
+          updates.push({ id: existing.id, quantity: existing.quantity + count });
         } else {
-          await db.insert(inventoryTable).values({
-            id: crypto.randomUUID(),
-            petId: pet.id,
-            itemId: foundItemId,
-            quantity: 1,
-          });
+          inserts.push({ id: crypto.randomUUID(), petId: pet.id, itemId, quantity: count });
         }
+      }
+
+      if (inserts.length > 0) {
+        await db.insert(inventoryTable).values(inserts);
+      }
+      for (const u of updates) {
+        await db.update(inventoryTable).set({ quantity: u.quantity }).where(eq(inventoryTable.id, u.id));
       }
     }
   }
@@ -1285,6 +1314,31 @@ git commit -m "feat(pebble): implement Life Engine with encounter detection"
 - [ ] **Step 1: Create `workers/pebble/src/lib/ai/ascii.ts`**
 
 ```ts
+async function runAiWithRetry(
+  ai: Ai,
+  messages: Array<{ role: string; content: string }>,
+  maxTokens: number,
+  maxRetries = 3
+): Promise<string> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await ai.run("@cf/meta/llama-3.1-8b-instruct", {
+        messages,
+        max_tokens: maxTokens,
+      });
+      return (response as { response: string }).response.trim();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("7505") && attempt < maxRetries - 1) {
+        await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("AI inference failed after retries");
+}
+
 export async function generatePetAsciiArt(
   ai: Ai,
   petName: string,
@@ -1292,19 +1346,24 @@ export async function generatePetAsciiArt(
 ): Promise<string> {
   const dominantTrait = Object.entries(traits).sort(([, a], [, b]) => b - a)[0][0];
 
-  const response = await ai.run("@cf/meta/llama-3.1-8b-instruct", {
-    prompt: `Generate a small ASCII art creature (max 6 lines, max 20 characters wide) for a cozy virtual pet named "${petName}". It should be an abstract, cute creature. Its dominant personality trait is ${dominantTrait}. Only output the ASCII art, nothing else. No explanation, no markdown code fences.`,
-    max_tokens: 150,
-  });
-
-  return (response as { response: string }).response.trim();
+  return runAiWithRetry(
+    ai,
+    [{
+      role: "user",
+      content: `Generate a small ASCII art creature (max 6 lines, max 20 characters wide) for a cozy virtual pet named "${petName}". It should be an abstract, cute creature. Its dominant personality trait is ${dominantTrait}. Only output the ASCII art, nothing else. No explanation, no markdown code fences.`,
+    }],
+    150
+  );
 }
+
+export { runAiWithRetry };
 ```
 
 - [ ] **Step 2: Create `workers/pebble/src/lib/ai/stories.ts`**
 
 ```ts
 import type { ComputedStory } from "../engine/life-engine";
+import { runAiWithRetry } from "./ascii";
 
 export async function generateStoryNarrative(
   ai: Ai,
@@ -1323,15 +1382,19 @@ export async function generateStoryNarrative(
     })
     .join("\n");
 
-  const response = await ai.run("@cf/meta/llama-3.1-8b-instruct", {
-    prompt: `You are narrating the life of a cozy virtual pet named "${petName}". Write a short, warm story line (1-2 sentences each) for each of these events. Keep the tone gentle, cozy, and slightly whimsical. Output one line per event, in order. No numbering, no bullet points, no extra formatting.
+  const text = await runAiWithRetry(
+    ai,
+    [{
+      role: "user",
+      content: `You are narrating the life of a cozy virtual pet named "${petName}". Write a short, warm story line (1-2 sentences each) for each of these events. Keep the tone gentle, cozy, and slightly whimsical. Output one line per event, in order. No numbering, no bullet points, no extra formatting.
 
 Events:
 ${summary}`,
-    max_tokens: 500,
-  });
+    }],
+    500
+  );
 
-  const lines = (response as { response: string }).response.trim().split("\n").filter(Boolean);
+  const lines = text.split("\n").filter(Boolean);
   const result = new Map<number, string>();
 
   for (let i = 0; i < entries.length; i++) {
@@ -1428,24 +1491,12 @@ export function registerAdoptTool(server: McpServer, env: CloudflareBindings) {
           createdAt: now,
         });
 
-        // Give starter items
-        const { inventory: inventoryTable, item: itemTable } = await import("@repo/db/schema");
-        const starterItems = ["rice-ball", "rice-ball", "rice-ball", "compass"];
-        for (const itemId of starterItems) {
-          const existing = await db
-            .select({ id: inventoryTable.id, quantity: inventoryTable.quantity })
-            .from(inventoryTable)
-            .where(eq(inventoryTable.petId, petId))
-            .limit(1);
-
-          // For starters, just insert fresh
-          await db.insert(inventoryTable).values({
-            id: crypto.randomUUID(),
-            petId,
-            itemId,
-            quantity: 1,
-          });
-        }
+        // Give starter items (batch insert)
+        const { inventory: inventoryTable } = await import("@repo/db/schema");
+        await db.insert(inventoryTable).values([
+          { id: crypto.randomUUID(), petId, itemId: "rice-ball", quantity: 3 },
+          { id: crypto.randomUUID(), petId, itemId: "compass", quantity: 1 },
+        ]);
 
         const traitLines = [
           `Curiosity: ${"█".repeat(Math.floor(traits.curiosity / 10))}${"░".repeat(10 - Math.floor(traits.curiosity / 10))} ${traits.curiosity}`,
@@ -1506,7 +1557,7 @@ function getPlayerId(): string {
   return userId;
 }
 
-export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
+export function registerFeedTool(server: McpServer, env: CloudflareBindings, ctx: ExecutionContext) {
   server.registerTool(
     "feed",
     {
@@ -1537,24 +1588,27 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
         // Run the Life Engine
         const newStories = await runLifeEngine(db, pet, now);
 
-        // Generate narratives for stories that don't have one yet
-        const storiesNeedingNarrative = newStories.filter((s) => !s.encounteredPetId || true);
+        // Generate narratives for new stories
         let narratives = new Map<number, string>();
-        if (storiesNeedingNarrative.length > 0) {
-          narratives = await generateStoryNarrative(env.AI, pet.name, storiesNeedingNarrative);
+        if (newStories.length > 0) {
+          narratives = await generateStoryNarrative(env.AI, pet.name, newStories);
 
-          // Cache narratives in DB
-          for (const [timeWindow, narrative] of narratives) {
-            await db
-              .update(storyTable)
-              .set({ story: narrative })
-              .where(
-                and(
-                  eq(storyTable.petId, pet.id),
-                  eq(storyTable.timeWindow, timeWindow)
-                )
-              );
-          }
+          // Cache narratives in DB via waitUntil (non-blocking background write)
+          ctx.waitUntil(
+            (async () => {
+              for (const [timeWindow, narrative] of narratives) {
+                await db
+                  .update(storyTable)
+                  .set({ story: narrative })
+                  .where(
+                    and(
+                      eq(storyTable.petId, pet.id),
+                      eq(storyTable.timeWindow, timeWindow)
+                    )
+                  );
+              }
+            })()
+          );
         }
 
         // Collect pending items (mark as collected)
@@ -1569,7 +1623,9 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
           );
 
         const collectedItems: string[] = [];
+        const uncollectedIds: string[] = [];
         for (const entry of uncollected) {
+          uncollectedIds.push(entry.id);
           if (entry.itemsFound) {
             const items = JSON.parse(entry.itemsFound) as string[];
             for (const id of items) {
@@ -1577,10 +1633,16 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
               if (def) collectedItems.push(def.name);
             }
           }
-          await db
-            .update(storyTable)
-            .set({ collected: true })
-            .where(eq(storyTable.id, entry.id));
+        }
+
+        // Batch mark as collected
+        if (uncollectedIds.length > 0) {
+          for (const id of uncollectedIds) {
+            await db
+              .update(storyTable)
+              .set({ collected: true })
+              .where(eq(storyTable.id, id));
+          }
         }
 
         // Update last checked
@@ -1604,11 +1666,11 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
           ? `${pet.name} is at home.`
           : `${pet.name} is traveling at ${latest.location}.`;
 
-        // Build feed output
+        // Build feed output — use in-memory narratives for new stories, DB for older
         const storyLines = recentStories
           .reverse()
           .map((s) => {
-            const narrative = s.story || `${pet.name} was ${s.activityType}.`;
+            const narrative = narratives.get(s.timeWindow) || s.story || `${pet.name} was ${s.activityType}.`;
             return `• ${narrative}`;
           })
           .join("\n");
@@ -1959,14 +2021,14 @@ import { registerFeedTool } from "./tools/feed";
 import { registerPackTool } from "./tools/pack";
 import { registerItemsTool } from "./tools/items";
 
-function createServer(env: CloudflareBindings) {
+function createServer(env: CloudflareBindings, ctx: ExecutionContext) {
   const server = new McpServer({
     name: "rs-pebble-mcp",
     version: "1.0.0",
   });
 
   registerAdoptTool(server, env);
-  registerFeedTool(server, env);
+  registerFeedTool(server, env, ctx);
   registerPackTool(server, env);
   registerItemsTool(server, env);
 
@@ -1979,7 +2041,7 @@ export const mcpApiHandler = {
     env: CloudflareBindings,
     ctx: ExecutionContext
   ) {
-    const server = createServer(env);
+    const server = createServer(env, ctx);
     return createMcpHandler(server)(request, env, ctx);
   },
 };

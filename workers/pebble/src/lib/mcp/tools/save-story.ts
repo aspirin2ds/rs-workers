@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getMcpAuthContext } from "agents/mcp";
 import { z } from "zod";
-import { eq, and } from "drizzle-orm";
-import { pet as petTable, story as storyTable } from "@repo/db/schema";
+import { eq } from "drizzle-orm";
+import { pet as petTable } from "@repo/db/schema";
 import { getDb } from "../../db";
 
 function getPlayerId(): string {
@@ -74,6 +74,12 @@ export function registerSaveStoryTool(server: McpServer, env: CloudflareBindings
           return errorResult("Provide both petId and asciiArt together.");
         }
 
+        if (stories && stories.length > 0) {
+          return errorResult(
+            "Feed stories are server-generated now. save-story only accepts pet ASCII art."
+          );
+        }
+
         if (asciiArt && petId) {
           if (petId !== ownedPetId) {
             return errorResult("That's not your pet.");
@@ -101,33 +107,12 @@ export function registerSaveStoryTool(server: McpServer, env: CloudflareBindings
           savedCount++;
         }
 
-        if (stories && stories.length > 0) {
-          for (const story of stories) {
-            const matching = await db
-              .select({ id: storyTable.id })
-              .from(storyTable)
-              .where(and(eq(storyTable.id, story.id), eq(storyTable.petId, ownedPetId)))
-              .limit(1);
-
-            if (matching.length === 0) {
-              continue;
-            }
-
-            await db
-              .update(storyTable)
-              .set({ story: story.narrative })
-              .where(and(eq(storyTable.id, story.id), eq(storyTable.petId, ownedPetId)));
-            savedCount++;
-            savedStoriesCount++;
-          }
-        }
-
         if (savedCount === 0) {
           return {
             content: [
               {
                 type: "text" as const,
-                text: "Nothing to save. Provide stories or asciiArt.",
+                text: "Nothing to save. Provide petId and asciiArt.",
               },
             ],
           };

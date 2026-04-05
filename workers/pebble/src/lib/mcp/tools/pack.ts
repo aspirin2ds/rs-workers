@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getMcpAuthContext } from "agents/mcp";
 import { z } from "zod";
 import { eq, and } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import {
   pet as petTable,
   pack as packTable,
@@ -88,52 +89,15 @@ export function registerPackTool(server: McpServer, env: CloudflareBindings) {
         }
 
         if (action === "add") {
-          const added = await db.transaction(async (tx) => {
-            const inventory = await tx
-              .select({ id: inventoryTable.id, quantity: inventoryTable.quantity })
-              .from(inventoryTable)
-              .where(
-                and(eq(inventoryTable.petId, petId), eq(inventoryTable.itemId, itemId))
-              )
-              .limit(1);
+          const inventory = await db
+            .select({ id: inventoryTable.id, quantity: inventoryTable.quantity })
+            .from(inventoryTable)
+            .where(
+              and(eq(inventoryTable.petId, petId), eq(inventoryTable.itemId, itemId))
+            )
+            .limit(1);
 
-            if (inventory.length === 0 || inventory[0].quantity <= 0) {
-              return false;
-            }
-
-            if (inventory[0].quantity === 1) {
-              await tx.delete(inventoryTable).where(eq(inventoryTable.id, inventory[0].id));
-            } else {
-              await tx
-                .update(inventoryTable)
-                .set({ quantity: inventory[0].quantity - 1 })
-                .where(eq(inventoryTable.id, inventory[0].id));
-            }
-
-            const existingPack = await tx
-              .select({ id: packTable.id, quantity: packTable.quantity })
-              .from(packTable)
-              .where(and(eq(packTable.petId, petId), eq(packTable.itemId, itemId)))
-              .limit(1);
-
-            if (existingPack.length > 0) {
-              await tx
-                .update(packTable)
-                .set({ quantity: existingPack[0].quantity + 1 })
-                .where(eq(packTable.id, existingPack[0].id));
-            } else {
-              await tx.insert(packTable).values({
-                id: crypto.randomUUID(),
-                petId,
-                itemId,
-                quantity: 1,
-              });
-            }
-
-            return true;
-          });
-
-          if (!added) {
+          if (inventory.length === 0 || inventory[0].quantity <= 0) {
             return {
               content: [
                 {
@@ -144,6 +108,46 @@ export function registerPackTool(server: McpServer, env: CloudflareBindings) {
             };
           }
 
+          const existingPack = await db
+            .select({ id: packTable.id, quantity: packTable.quantity })
+            .from(packTable)
+            .where(and(eq(packTable.petId, petId), eq(packTable.itemId, itemId)))
+            .limit(1);
+
+          const addQueries: BatchItem<"sqlite">[] = [];
+          if (inventory[0].quantity === 1) {
+            addQueries.push(
+              db.delete(inventoryTable).where(eq(inventoryTable.id, inventory[0].id))
+            );
+          } else {
+            addQueries.push(
+              db
+                .update(inventoryTable)
+                .set({ quantity: inventory[0].quantity - 1 })
+                .where(eq(inventoryTable.id, inventory[0].id))
+            );
+          }
+
+          if (existingPack.length > 0) {
+            addQueries.push(
+              db
+                .update(packTable)
+                .set({ quantity: existingPack[0].quantity + 1 })
+                .where(eq(packTable.id, existingPack[0].id))
+            );
+          } else {
+            addQueries.push(
+              db.insert(packTable).values({
+                id: crypto.randomUUID(),
+                petId,
+                itemId,
+                quantity: 1,
+              })
+            );
+          }
+
+          await db.batch(addQueries as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+
           const name = itemMap.get(itemId)?.name ?? itemId;
           return {
             content: [{ type: "text" as const, text: `Added ${name} to the pack.` }],
@@ -151,56 +155,59 @@ export function registerPackTool(server: McpServer, env: CloudflareBindings) {
         }
 
         if (action === "remove") {
-          const removed = await db.transaction(async (tx) => {
-            const existing = await tx
-              .select({ id: packTable.id, quantity: packTable.quantity })
-              .from(packTable)
-              .where(and(eq(packTable.petId, petId), eq(packTable.itemId, itemId)))
-              .limit(1);
+          const existing = await db
+            .select({ id: packTable.id, quantity: packTable.quantity })
+            .from(packTable)
+            .where(and(eq(packTable.petId, petId), eq(packTable.itemId, itemId)))
+            .limit(1);
 
-            if (existing.length === 0) {
-              return false;
-            }
-
-            if (existing[0].quantity === 1) {
-              await tx.delete(packTable).where(eq(packTable.id, existing[0].id));
-            } else {
-              await tx
-                .update(packTable)
-                .set({ quantity: existing[0].quantity - 1 })
-                .where(eq(packTable.id, existing[0].id));
-            }
-
-            const inventory = await tx
-              .select({ id: inventoryTable.id, quantity: inventoryTable.quantity })
-              .from(inventoryTable)
-              .where(
-                and(eq(inventoryTable.petId, petId), eq(inventoryTable.itemId, itemId))
-              )
-              .limit(1);
-
-            if (inventory.length > 0) {
-              await tx
-                .update(inventoryTable)
-                .set({ quantity: inventory[0].quantity + 1 })
-                .where(eq(inventoryTable.id, inventory[0].id));
-            } else {
-              await tx.insert(inventoryTable).values({
-                id: crypto.randomUUID(),
-                petId,
-                itemId,
-                quantity: 1,
-              });
-            }
-
-            return true;
-          });
-
-          if (!removed) {
+          if (existing.length === 0) {
             return {
               content: [{ type: "text" as const, text: "That item isn't in the pack." }],
             };
           }
+
+          const inventory = await db
+            .select({ id: inventoryTable.id, quantity: inventoryTable.quantity })
+            .from(inventoryTable)
+            .where(
+              and(eq(inventoryTable.petId, petId), eq(inventoryTable.itemId, itemId))
+            )
+            .limit(1);
+
+          const removeQueries: BatchItem<"sqlite">[] = [];
+          if (existing[0].quantity === 1) {
+            removeQueries.push(
+              db.delete(packTable).where(eq(packTable.id, existing[0].id))
+            );
+          } else {
+            removeQueries.push(
+              db
+                .update(packTable)
+                .set({ quantity: existing[0].quantity - 1 })
+                .where(eq(packTable.id, existing[0].id))
+            );
+          }
+
+          if (inventory.length > 0) {
+            removeQueries.push(
+              db
+                .update(inventoryTable)
+                .set({ quantity: inventory[0].quantity + 1 })
+                .where(eq(inventoryTable.id, inventory[0].id))
+            );
+          } else {
+            removeQueries.push(
+              db.insert(inventoryTable).values({
+                id: crypto.randomUUID(),
+                petId,
+                itemId,
+                quantity: 1,
+              })
+            );
+          }
+
+          await db.batch(removeQueries as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
 
           const name = itemMap.get(itemId)?.name ?? itemId;
           return {

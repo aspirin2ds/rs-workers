@@ -1,13 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getMcpAuthContext } from "agents/mcp";
-import { eq, and, desc } from "drizzle-orm";
-import {
-  pet as petTable,
-  story as storyTable,
-  inventory as inventoryTable,
-} from "@repo/db/schema";
 import { getDb } from "../../db";
-import { runLifeEngine } from "../../engine/life-engine";
+import { createStoryGenerationRepository } from "../../story-generation/repository";
 import { itemMap } from "../../../data/items";
 
 function getPlayerId(): string {
@@ -23,21 +17,17 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
   server.registerTool(
     "feed",
     {
-      description: "Check on your pet — see what they've been up to, read their stories, and collect any items they found.",
+      description:
+        "Check on your pet — see what they've been up to, read their stories, and collect any items they found.",
       inputSchema: {},
     },
     async () => {
       try {
         const playerId = getPlayerId();
-        const db = getDb(env);
+        const repo = createStoryGenerationRepository(getDb(env));
+        const pet = await repo.getPetForFeed(playerId);
 
-        const pets = await db
-          .select()
-          .from(petTable)
-          .where(eq(petTable.playerId, playerId))
-          .limit(1);
-
-        if (pets.length === 0) {
+        if (!pet) {
           return {
             content: [
               {
@@ -48,110 +38,78 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
           };
         }
 
-        const pet = pets[0];
         const now = Date.now();
-
-        await runLifeEngine(db, pet, now);
+        const stories = await repo.listRecentVisibleStories(pet.id);
+        const unconsumedStories = stories.filter((story: any) => !story.consumedAt);
+        const shouldResetBudget = unconsumedStories.length > 0;
 
         const collectedItems: string[] = [];
-        await db.transaction(async (tx) => {
-          const claimedStories = await tx
-            .update(storyTable)
-            .set({ collected: true })
-            .where(and(eq(storyTable.petId, pet.id), eq(storyTable.collected, false)))
-            .returning({
-              itemsFound: storyTable.itemsFound,
-            });
+        const itemCounts = new Map<string, number>();
 
-          const itemCounts = new Map<string, number>();
-          for (const entry of claimedStories) {
-            if (!entry.itemsFound) {
-              continue;
+        for (const story of unconsumedStories) {
+          const itemsFound = story.itemsFound
+            ? (JSON.parse(story.itemsFound) as string[])
+            : [];
+          for (const itemId of itemsFound) {
+            const item = itemMap.get(itemId);
+            if (item) {
+              collectedItems.push(item.name);
             }
-
-            const items = JSON.parse(entry.itemsFound) as string[];
-            for (const id of items) {
-              const def = itemMap.get(id);
-              if (def) {
-                collectedItems.push(def.name);
-              }
-              itemCounts.set(id, (itemCounts.get(id) ?? 0) + 1);
-            }
+            itemCounts.set(itemId, (itemCounts.get(itemId) ?? 0) + 1);
           }
+        }
 
-          if (itemCounts.size > 0) {
-            const existingInventory = await tx
-              .select({
-                id: inventoryTable.id,
-                itemId: inventoryTable.itemId,
-                quantity: inventoryTable.quantity,
-              })
-              .from(inventoryTable)
-              .where(eq(inventoryTable.petId, pet.id));
+        if (unconsumedStories.length > 0) {
+          await repo.consumeStories({
+            storyIds: unconsumedStories.map((story: any) => story.id),
+            consumedAt: now,
+          });
+          await repo.upsertInventoryItems({
+            petId: pet.id,
+            itemCounts,
+          });
+        }
 
-            const existingMap = new Map(
-              existingInventory.map((inventory) => [inventory.itemId, inventory])
-            );
+        const activeHead = await repo.getActiveChainHeadForUser(playerId);
+        let generationActive = Boolean(activeHead);
+        let remainingGenerations = activeHead?.chain.remainingGenerations ?? null;
+        let remainingRetries = activeHead?.chain.remainingRetries ?? null;
 
-            const inserts: Array<{
-              id: string;
-              petId: string;
-              itemId: string;
-              quantity: number;
-            }> = [];
-            const updates: Array<{ id: string; quantity: number }> = [];
-
-            for (const [itemId, count] of itemCounts) {
-              const existing = existingMap.get(itemId);
-              if (existing) {
-                updates.push({ id: existing.id, quantity: existing.quantity + count });
-              } else {
-                inserts.push({
-                  id: crypto.randomUUID(),
-                  petId: pet.id,
-                  itemId,
-                  quantity: count,
-                });
-              }
-            }
-
-            if (inserts.length > 0) {
-              await tx.insert(inventoryTable).values(inserts);
-            }
-
-            for (const update of updates) {
-              await tx
-                .update(inventoryTable)
-                .set({ quantity: update.quantity })
-                .where(eq(inventoryTable.id, update.id));
-            }
-          }
-
-          await tx
-            .update(petTable)
-            .set({ lastCheckedAt: new Date(now) })
-            .where(eq(petTable.id, pet.id));
-        });
-
-        const recentStories = await db
-          .select()
-          .from(storyTable)
-          .where(eq(storyTable.petId, pet.id))
-          .orderBy(desc(storyTable.timeWindow))
-          .limit(20);
-
-        const latest = recentStories[0];
-        const isHome = !latest || !latest.location || latest.activityType === "returning";
-
-        const events = recentStories.reverse().map((story) => ({
-          id: story.id,
-          activityType: story.activityType,
-          location: story.location,
-          encounteredPetId: story.encounteredPetId,
-          itemsFound: story.itemsFound ? JSON.parse(story.itemsFound) : null,
-          narrative: story.story,
-          timeWindow: story.timeWindow,
-        }));
+        if (!activeHead) {
+          const bootstrapped = await repo.bootstrapChain({
+            userId: playerId,
+            petId: pet.id,
+            now,
+            minDelaySeconds: env.STORY_MIN_DELAY_SECONDS,
+            generationBudget: env.STORY_MAX_GENERATIONS,
+            retryBudget: env.STORY_MAX_RETRIES,
+          });
+          await env.STORY_QUEUE.send(
+            {
+              taskId: bootstrapped.task.id,
+              petId: pet.id,
+              userId: playerId,
+              scheduledFor: bootstrapped.task.scheduledFor,
+            },
+            {
+              delaySeconds: Math.max(
+                0,
+                Math.floor((bootstrapped.task.scheduledFor - now) / 1000),
+              ),
+            },
+          );
+          generationActive = true;
+          remainingGenerations = bootstrapped.chain.remainingGenerations;
+          remainingRetries = bootstrapped.chain.remainingRetries;
+        } else if (shouldResetBudget) {
+          await repo.resetActiveChainBudget({
+            chainId: activeHead.chain.id,
+            generationBudget: env.STORY_MAX_GENERATIONS,
+            retryBudget: env.STORY_MAX_RETRIES,
+          });
+          remainingGenerations = env.STORY_MAX_GENERATIONS;
+          remainingRetries = env.STORY_MAX_RETRIES;
+        }
 
         return {
           content: [
@@ -162,8 +120,7 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
                   pet: {
                     name: pet.name,
                     asciiArt: pet.asciiArt,
-                    status: isHome ? "home" : "traveling",
-                    currentLocation: isHome ? null : latest?.location,
+                    status: "home",
                     traits: {
                       curiosity: pet.curiosity,
                       energy: pet.energy,
@@ -172,12 +129,28 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
                       creativity: pet.creativity,
                     },
                   },
-                  events,
+                  stories: stories.map((story: any) => ({
+                    id: story.id,
+                    storyTime:
+                      story.storyTime instanceof Date
+                        ? story.storyTime.getTime()
+                        : story.storyTime,
+                    story: story.story,
+                    activityType: story.activityType,
+                    location: story.location,
+                    itemsFound: story.itemsFound
+                      ? JSON.parse(story.itemsFound)
+                      : [],
+                  })),
                   collected: collectedItems,
-                  hint: "Narrate any events where narrative is null in a cozy, whimsical tone. Then call save-story with { stories: [{ id, narrative }] } to persist them.",
+                  generation: {
+                    active: generationActive,
+                    remainingGenerations,
+                    remainingRetries,
+                  },
                 },
                 null,
-                2
+                2,
               ),
             },
           ],
@@ -189,6 +162,6 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
           isError: true as const,
         };
       }
-    }
+    },
   );
 }

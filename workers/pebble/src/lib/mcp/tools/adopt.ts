@@ -76,8 +76,8 @@ export function registerAdoptTool(server: McpServer, env: CloudflareBindings) {
         const petId = crypto.randomUUID();
         const now = new Date();
 
-        await db.transaction(async (tx) => {
-          await tx.insert(petTable).values({
+        await db.batch([
+          db.insert(petTable).values({
             id: petId,
             playerId,
             name,
@@ -86,13 +86,12 @@ export function registerAdoptTool(server: McpServer, env: CloudflareBindings) {
             ...traits,
             lastCheckedAt: now,
             createdAt: now,
-          });
-
-          await tx.insert(inventoryTable).values([
+          }),
+          db.insert(inventoryTable).values([
             { id: crypto.randomUUID(), petId, itemId: "rice-ball", quantity: 3 },
             { id: crypto.randomUUID(), petId, itemId: "compass", quantity: 1 },
-          ]);
-        });
+          ]),
+        ]);
 
         const traitLines = [
           `Curiosity: ${"█".repeat(Math.floor(traits.curiosity / 10))}${"░".repeat(10 - Math.floor(traits.curiosity / 10))} ${traits.curiosity}`,

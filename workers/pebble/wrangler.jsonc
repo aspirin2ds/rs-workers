@@ -13,6 +13,12 @@
     "enabled": true,
     "head_sampling_rate": 1
   },
+  "vars": {
+    "STORY_MIN_DELAY_SECONDS": 600,
+    "STORY_MAX_DELAY_SECONDS": 1800,
+    "STORY_MAX_GENERATIONS": 5,
+    "STORY_MAX_RETRIES": 2
+  },
   "d1_databases": [
     {
       "binding": "RS_DB",
@@ -23,8 +29,26 @@
   ],
   "kv_namespaces": [
     {
-      "binding": "KV",
+      "binding": "OAUTH_KV",
       "id": "fc6103fd7bc14956941e026b56039d0c"
     }
-  ]
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "STORY_QUEUE",
+        "queue": "rs-pebble-story-generation"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "rs-pebble-story-generation",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1
+      }
+    ]
+  },
+  "ai": {
+    "binding": "AI"
+  }
 }

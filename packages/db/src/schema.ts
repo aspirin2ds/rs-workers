@@ -174,21 +174,106 @@ export const story = sqliteTable(
     petId: text("pet_id")
       .notNull()
       .references(() => pet.id, { onDelete: "cascade" }),
-    timeWindow: integer("time_window").notNull(),
-    activityType: text("activity_type").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    taskId: text("task_id").references(() => storyGenerationTask.id, {
+      onDelete: "set null",
+    }),
+    chainId: text("chain_id").references(() => storyGenerationChain.id, {
+      onDelete: "set null",
+    }),
+    storyTime: integer("story_time", { mode: "timestamp_ms" }).notNull(),
     location: text("location"),
+    activityType: text("activity_type"),
     story: text("story"),
-    encounteredPetId: text("encountered_pet_id"),
     itemsFound: text("items_found"),
-    collected: integer("collected", { mode: "boolean" }).notNull().default(false),
+    metadataJson: text("metadata_json"),
+    consumedAt: integer("consumed_at", { mode: "timestamp_ms" }),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
       .notNull(),
   },
   (table) => [
-    index("story_petId_idx").on(table.petId),
-    index("story_timeWindow_location_idx").on(table.timeWindow, table.location),
-    uniqueIndex("story_petId_timeWindow_unique").on(table.petId, table.timeWindow),
+    index("story_task_id_idx").on(table.taskId),
+    index("story_chain_id_idx").on(table.chainId),
+    index("story_pet_story_time_idx").on(table.petId, table.storyTime),
+    index("story_pet_consumed_story_time_idx").on(
+      table.petId,
+      table.consumedAt,
+      table.storyTime,
+    ),
+    index("story_user_consumed_at_idx").on(table.userId, table.consumedAt),
+  ],
+);
+
+export const storyGenerationChain = sqliteTable(
+  "story_generation_chain",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    petId: text("pet_id")
+      .notNull()
+      .references(() => pet.id, { onDelete: "cascade" }),
+    status: text("status").notNull(),
+    remainingGenerations: integer("remaining_generations").notNull(),
+    remainingRetries: integer("remaining_retries").notNull(),
+    activeTaskId: text("active_task_id"),
+    lastStoryAt: integer("last_story_at", { mode: "timestamp_ms" }),
+    nextNotBeforeAt: integer("next_not_before_at", { mode: "timestamp_ms" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("story_generation_chain_user_status_idx").on(table.userId, table.status),
+    index("story_generation_chain_pet_status_idx").on(table.petId, table.status),
+  ],
+);
+
+export const storyGenerationTask = sqliteTable(
+  "story_generation_task",
+  {
+    id: text("id").primaryKey(),
+    chainId: text("chain_id")
+      .notNull()
+      .references(() => storyGenerationChain.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    petId: text("pet_id")
+      .notNull()
+      .references(() => pet.id, { onDelete: "cascade" }),
+    parentTaskId: text("parent_task_id"),
+    status: text("status").notNull(),
+    scheduledFor: integer("scheduled_for", { mode: "timestamp_ms" }).notNull(),
+    attemptNumber: integer("attempt_number").notNull().default(1),
+    proposedNextAt: integer("proposed_next_at", { mode: "timestamp_ms" }),
+    validatedNextAt: integer("validated_next_at", { mode: "timestamp_ms" }),
+    createdStoryId: text("created_story_id"),
+    failureReason: text("failure_reason"),
+    startedAt: integer("started_at", { mode: "timestamp_ms" }),
+    finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("story_generation_task_chain_status_idx").on(table.chainId, table.status),
+    index("story_generation_task_user_status_idx").on(table.userId, table.status),
+    index("story_generation_task_pet_status_idx").on(table.petId, table.status),
+    index("story_generation_task_scheduled_for_idx").on(table.scheduledFor),
+    index("story_generation_task_parent_task_id_idx").on(table.parentTaskId),
   ],
 );
 

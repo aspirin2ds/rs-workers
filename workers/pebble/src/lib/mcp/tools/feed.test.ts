@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerFeedTool } from "./feed";
 
-const { getMcpAuthContext, getDb, createStoryGenerationRepository } = vi.hoisted(
+const { requirePlayer, getDb, createStoryGenerationRepository } = vi.hoisted(
   () => ({
-    getMcpAuthContext: vi.fn(),
+    requirePlayer: vi.fn(),
     getDb: vi.fn(),
     createStoryGenerationRepository: vi.fn(),
   }),
 );
 
-vi.mock("agents/mcp", () => ({
-  getMcpAuthContext,
+vi.mock("../../auth", () => ({
+  requirePlayer,
 }));
 
 vi.mock("../../db", () => ({
@@ -62,9 +62,9 @@ function getHandler(repo: ReturnType<typeof makeRepository>) {
 
   registerFeedTool(server, {
     STORY_QUEUE: { send: vi.fn().mockResolvedValue(undefined) },
-    STORY_MIN_DELAY_SECONDS: 600,
-    STORY_MAX_GENERATIONS: 5,
-    STORY_MAX_RETRIES: 2,
+    STORY_MIN_DELAY_SECONDS: "600",
+    STORY_MAX_GENERATIONS: "5",
+    STORY_MAX_RETRIES: "2",
   } as never);
 
   return {
@@ -83,11 +83,63 @@ function getHandler(repo: ReturnType<typeof makeRepository>) {
 describe("registerFeedTool", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getMcpAuthContext.mockReturnValue({
-      props: {
-        userId: "user-1",
-      },
+    requirePlayer.mockResolvedValue({
+      userId: "user-1",
+      email: "test@example.com",
+      name: "Test",
     });
+  });
+
+  it("auto-bootstraps a starter pet when the user opens feed for the first time", async () => {
+    const repo = makeRepository({
+      getPetForFeed: vi
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: "pet-1",
+          name: "Pebble",
+          asciiArt: null,
+          curiosity: 34,
+          energy: 74,
+          sociability: 88,
+          courage: 51,
+          creativity: 78,
+        }),
+    });
+    const registerTool = vi.fn();
+    const server = { registerTool } as never;
+    const send = vi.fn().mockResolvedValue(undefined);
+    const batch = vi.fn().mockResolvedValue([]);
+
+    getDb.mockReturnValue({
+      insert: () => ({
+        values: (value: unknown) => value,
+      }),
+      batch,
+    });
+    createStoryGenerationRepository.mockReturnValue(repo);
+
+    registerFeedTool(server, {
+      STORY_QUEUE: { send },
+      STORY_MIN_DELAY_SECONDS: 600,
+      STORY_MAX_GENERATIONS: 5,
+      STORY_MAX_RETRIES: 2,
+    } as never);
+
+    const definition = registerTool.mock.calls[0]?.[1] as { description: string };
+    const handler = registerTool.mock.calls[0]?.[2] as () => Promise<{
+      content: Array<{ text: string }>;
+    }>;
+
+    const result = await handler();
+    const payload = JSON.parse(result.content[0]!.text);
+
+    expect(definition.description).toContain("poll");
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(repo.getPetForFeed).toHaveBeenCalledTimes(2);
+    expect(payload.bootstrap.createdPet).toBe(true);
+    expect(payload.pet.name).toBe("Pebble");
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it("creates a new chain and root task on empty bootstrap when no live task exists", async () => {

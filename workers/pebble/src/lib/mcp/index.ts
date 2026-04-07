@@ -1,10 +1,8 @@
 import { createMcpHandler } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerAdoptTool } from "./tools/adopt";
 import { registerFeedTool } from "./tools/feed";
 import { registerPackTool } from "./tools/pack";
 import { registerItemsTool } from "./tools/items";
-import { registerSaveStoryTool } from "./tools/save-story";
 
 function createServer(_env: CloudflareBindings) {
   const server = new McpServer({
@@ -12,11 +10,9 @@ function createServer(_env: CloudflareBindings) {
     version: "1.0.0",
   });
 
-  registerAdoptTool(server, _env);
   registerFeedTool(server, _env);
   registerPackTool(server, _env);
   registerItemsTool(server, _env);
-  registerSaveStoryTool(server, _env);
 
   return server;
 }

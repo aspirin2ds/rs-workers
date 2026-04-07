@@ -1,16 +1,62 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getMcpAuthContext } from "agents/mcp";
+import { inventory as inventoryTable, pet as petTable } from "@repo/db/schema";
 import { getDb } from "../../db";
+import { requirePlayer } from "../../auth";
 import { createStoryGenerationRepository } from "../../story-generation/repository";
 import { itemMap } from "../../../data/items";
 
-function getPlayerId(): string {
-  const ctx = getMcpAuthContext();
-  const userId = ctx?.props?.userId as string | undefined;
-  if (!userId) {
-    throw new Error("Not authenticated");
+function rollTrait(): number {
+  return Math.floor(Math.random() * 80) + 10;
+}
+
+async function ensurePetForFeed(
+  playerId: string,
+  env: CloudflareBindings,
+  repo: ReturnType<typeof createStoryGenerationRepository>,
+) {
+  let pet = await repo.getPetForFeed(playerId);
+  let createdPet = false;
+
+  if (pet) {
+    return { pet, createdPet };
   }
-  return userId;
+
+  const db = getDb(env);
+  const petId = crypto.randomUUID();
+  const now = new Date();
+
+  try {
+    await db.batch([
+      db.insert(petTable).values({
+        id: petId,
+        playerId,
+        name: "Pebble",
+        seed: Math.floor(Math.random() * 2147483647),
+        asciiArt: null,
+        curiosity: rollTrait(),
+        energy: rollTrait(),
+        sociability: rollTrait(),
+        courage: rollTrait(),
+        creativity: rollTrait(),
+        lastCheckedAt: now,
+        createdAt: now,
+      }),
+      db.insert(inventoryTable).values([
+        { id: crypto.randomUUID(), petId, itemId: "rice-ball", quantity: 3 },
+        { id: crypto.randomUUID(), petId, itemId: "compass", quantity: 1 },
+      ]),
+    ]);
+    createdPet = true;
+  } catch {
+    // Another request may have created the pet first.
+  }
+
+  pet = await repo.getPetForFeed(playerId);
+  if (!pet) {
+    throw new Error("Unable to initialize pet");
+  }
+
+  return { pet, createdPet };
 }
 
 export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
@@ -18,29 +64,18 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
     "feed",
     {
       description:
-        "Check on your pet — see what they've been up to, read their stories, and collect any items they found.",
+        "Open Pebble. This bootstraps your pet automatically on first use, then returns server-generated stories and collected items. Story generation is asynchronous, so poll again while `generation.active` is true.",
       inputSchema: {},
     },
     async () => {
       try {
-        const playerId = getPlayerId();
+        const { userId: playerId } = await requirePlayer(env);
         const repo = createStoryGenerationRepository(getDb(env));
-        const pet = await repo.getPetForFeed(playerId);
-
-        if (!pet) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: "You don't have a pet yet! Use `adopt` to get one.",
-              },
-            ],
-          };
-        }
+        const { pet, createdPet } = await ensurePetForFeed(playerId, env, repo);
 
         const now = Date.now();
         const stories = await repo.listRecentVisibleStories(pet.id);
-        const unconsumedStories = stories.filter((story: any) => !story.consumedAt);
+        const unconsumedStories = stories.filter((story) => !story.consumedAt);
         const shouldResetBudget = unconsumedStories.length > 0;
 
         const collectedItems: string[] = [];
@@ -61,7 +96,7 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
 
         if (unconsumedStories.length > 0) {
           await repo.consumeStories({
-            storyIds: unconsumedStories.map((story: any) => story.id),
+            storyIds: unconsumedStories.map((story) => story.id),
             consumedAt: now,
           });
           await repo.upsertInventoryItems({
@@ -80,9 +115,9 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
             userId: playerId,
             petId: pet.id,
             now,
-            minDelaySeconds: env.STORY_MIN_DELAY_SECONDS,
-            generationBudget: env.STORY_MAX_GENERATIONS,
-            retryBudget: env.STORY_MAX_RETRIES,
+            minDelaySeconds: Number(env.STORY_MIN_DELAY_SECONDS),
+            generationBudget: Number(env.STORY_MAX_GENERATIONS),
+            retryBudget: Number(env.STORY_MAX_RETRIES),
           });
           await env.STORY_QUEUE.send(
             {
@@ -104,11 +139,11 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
         } else if (shouldResetBudget) {
           await repo.resetActiveChainBudget({
             chainId: activeHead.chain.id,
-            generationBudget: env.STORY_MAX_GENERATIONS,
-            retryBudget: env.STORY_MAX_RETRIES,
+            generationBudget: Number(env.STORY_MAX_GENERATIONS),
+            retryBudget: Number(env.STORY_MAX_RETRIES),
           });
-          remainingGenerations = env.STORY_MAX_GENERATIONS;
-          remainingRetries = env.STORY_MAX_RETRIES;
+          remainingGenerations = Number(env.STORY_MAX_GENERATIONS);
+          remainingRetries = Number(env.STORY_MAX_RETRIES);
         }
 
         return {
@@ -129,7 +164,7 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
                       creativity: pet.creativity,
                     },
                   },
-                  stories: stories.map((story: any) => ({
+                  stories: stories.map((story) => ({
                     id: story.id,
                     storyTime:
                       story.storyTime instanceof Date
@@ -143,6 +178,9 @@ export function registerFeedTool(server: McpServer, env: CloudflareBindings) {
                       : [],
                   })),
                   collected: collectedItems,
+                  bootstrap: {
+                    createdPet,
+                  },
                   generation: {
                     active: generationActive,
                     remainingGenerations,

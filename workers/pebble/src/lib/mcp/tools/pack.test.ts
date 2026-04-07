@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerPackTool } from "./pack";
 
-const { getMcpAuthContext, getDb } = vi.hoisted(() => ({
-  getMcpAuthContext: vi.fn(),
+const { requirePlayer, getDb } = vi.hoisted(() => ({
+  requirePlayer: vi.fn(),
   getDb: vi.fn(),
 }));
 
-vi.mock("agents/mcp", () => ({
-  getMcpAuthContext,
+vi.mock("../../auth", () => ({
+  requirePlayer,
 }));
 
 vi.mock("../../db", () => ({
@@ -28,10 +28,10 @@ function makeSelectResult<T>(result: T) {
 describe("registerPackTool", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getMcpAuthContext.mockReturnValue({
-      props: {
-        userId: "user-1",
-      },
+    requirePlayer.mockResolvedValue({
+      userId: "user-1",
+      email: "test@example.com",
+      name: "Test",
     });
   });
 

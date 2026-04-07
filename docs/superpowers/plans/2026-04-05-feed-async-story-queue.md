@@ -52,7 +52,7 @@
   - Replace `runLifeEngine` flow with async chain bootstrap + story consumption logic
 - Modify: `workers/pebble/src/lib/mcp/tools/feed.test.ts`
   - Cover all `feed` scenarios from the spec
-- Modify: `workers/pebble/src/lib/mcp/tools/save-story.ts`
+- Delete: `workers/pebble/src/lib/mcp/tools/save-story.ts`
   - Narrow scope to pet ASCII art or other client-authored content only
 - Modify: `workers/pebble/src/lib/mcp/index.ts`
   - Keep MCP registration stable while `feed` internals change
@@ -665,7 +665,7 @@ git commit -m "feat(pebble): implement async story generation consumer"
 **Files:**
 - Modify: `workers/pebble/src/lib/mcp/tools/feed.ts`
 - Modify: `workers/pebble/src/lib/mcp/tools/feed.test.ts`
-- Modify: `workers/pebble/src/lib/mcp/tools/save-story.ts`
+- Delete: `workers/pebble/src/lib/mcp/tools/save-story.ts`
 
 - [ ] **Step 1: Expand `feed` tests to cover the scenario matrix**
 
@@ -783,13 +783,13 @@ if (!activeHead) {
 }
 ```
 
-- [ ] **Step 4: Restrict `save-story` to non-feed authored content**
+- [ ] **Step 4: Remove `save-story` from the MCP surface**
 
 ```ts
 if (input.stories && input.stories.length > 0) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify({
-      error: "Feed stories are server-generated now. save-story only accepts pet ASCII art.",
+      note: "feed is now the only entrypoint; no client-authored follow-up tool remains.",
     }) }],
     isError: true as const,
   };
@@ -798,13 +798,13 @@ if (input.stories && input.stories.length > 0) {
 
 - [ ] **Step 5: Run focused tests**
 
-Run: `pnpm --dir workers/pebble test -- lib/mcp/tools/feed.test.ts lib/mcp/tools/adopt.test.ts`
+Run: `pnpm --dir workers/pebble test -- lib/mcp/tools/feed.test.ts`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add workers/pebble/src/lib/mcp/tools/feed.ts workers/pebble/src/lib/mcp/tools/feed.test.ts workers/pebble/src/lib/mcp/tools/save-story.ts
+git add workers/pebble/src/lib/mcp/tools/feed.ts workers/pebble/src/lib/mcp/tools/feed.test.ts
 git commit -m "feat(pebble): refactor feed to async chain bootstrap"
 ```
 

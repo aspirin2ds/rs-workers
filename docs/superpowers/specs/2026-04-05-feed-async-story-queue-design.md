@@ -52,7 +52,7 @@ This model avoids "catching up" missed windows. The system is always scheduling 
 ### Runtime Split
 
 - MCP Worker:
-  - serves `feed`, `adopt`, `pack`, `items`, `save-story`
+  - serves `feed`, `pack`, `items`
   - reads visible stories and player state
   - collects loot and other synchronous feed information
   - seeds a new async story task when needed
@@ -499,7 +499,7 @@ Removed concepts:
 - `last_checked_at` as the simulation cursor
 - deterministic replay over elapsed time windows
 - synchronous story computation inside `feed`
-- client-side story narration followed by `save-story`
+- no client-authored follow-up is required; the server generates and persists stories
 
 Retained concepts:
 
@@ -598,14 +598,9 @@ Rules:
 }
 ```
 
-### `save-story`
+### Pet Bootstrap
 
-If server-side AI is the only story author, `save-story` no longer owns narrative persistence for feed stories.
-
-Options:
-
-- keep `save-story` only for pet ASCII art or other future client-authored content
-- or remove story-narrative support from `save-story`
+`feed` is the only entrypoint. If the player has no pet yet, the first `feed` call creates a starter pet automatically, seeds starter inventory, starts the async generation chain, and returns a payload that tells the client to poll again while generation is active.
 
 This refactor should treat feed-story persistence as server-owned.
 

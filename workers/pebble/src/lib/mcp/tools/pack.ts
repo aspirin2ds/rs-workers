@@ -1,5 +1,4 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getMcpAuthContext } from "agents/mcp";
 import { z } from "zod";
 import { eq, and } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
@@ -9,16 +8,8 @@ import {
   inventory as inventoryTable,
 } from "@repo/db/schema";
 import { getDb } from "../../db";
+import { requirePlayer } from "../../auth";
 import { itemMap } from "../../../data/items";
-
-function getPlayerId(): string {
-  const ctx = getMcpAuthContext();
-  const userId = ctx?.props?.userId as string | undefined;
-  if (!userId) {
-    throw new Error("Not authenticated");
-  }
-  return userId;
-}
 
 export function registerPackTool(server: McpServer, env: CloudflareBindings) {
   server.registerTool(
@@ -32,7 +23,7 @@ export function registerPackTool(server: McpServer, env: CloudflareBindings) {
     },
     async ({ action, itemId }) => {
       try {
-        const playerId = getPlayerId();
+        const { userId: playerId } = await requirePlayer(env);
         const db = getDb(env);
 
         const pets = await db
@@ -46,7 +37,7 @@ export function registerPackTool(server: McpServer, env: CloudflareBindings) {
             content: [
               {
                 type: "text" as const,
-                text: "You don't have a pet yet! Use `adopt` first.",
+                text: "You don't have a pet yet. Open `feed` first to bootstrap Pebble.",
               },
             ],
           };

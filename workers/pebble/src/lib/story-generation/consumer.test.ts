@@ -4,8 +4,8 @@ import { processStoryGenerationMessage } from "./consumer";
 function makeEnv(input: { queue?: { send: ReturnType<typeof vi.fn> } }) {
   return {
     STORY_QUEUE: input.queue ?? { send: vi.fn() },
-    STORY_MIN_DELAY_SECONDS: 600,
-    STORY_MAX_DELAY_SECONDS: 1800,
+    STORY_MIN_DELAY_SECONDS: "600",
+    STORY_MAX_DELAY_SECONDS: "1800",
   } as unknown as CloudflareBindings;
 }
 
@@ -25,6 +25,7 @@ function makeRepo() {
       remainingGenerations: 4,
     }),
     enqueueNextTask: vi.fn().mockResolvedValue({ id: "task-2" }),
+    markTaskInvalid: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -59,7 +60,7 @@ describe("processStoryGenerationMessage", () => {
   it("marks the task invalid and decrements chain retries without spending generation budget", async () => {
     const repo = {
       ...makeRepo(),
-      markTaskInvalid: vi.fn().mockResolvedValue(undefined),
+      markTaskInvalid: vi.fn().mockResolvedValue({ retryTask: null }),
       decrementGenerationBudget: vi.fn(),
     };
     const generateStory = vi
@@ -85,5 +86,45 @@ describe("processStoryGenerationMessage", () => {
       }),
     );
     expect(repo.decrementGenerationBudget).not.toHaveBeenCalled();
+  });
+
+  it("enqueues the retry task returned for an invalid generated story", async () => {
+    const repo = {
+      ...makeRepo(),
+      markTaskInvalid: vi.fn().mockResolvedValue({
+        retryTask: {
+          id: "task-2",
+          petId: "pet-1",
+          userId: "user-1",
+          scheduledFor: new Date("2026-04-05T10:30:00.000Z").getTime(),
+        },
+      }),
+    };
+    const queue = { send: vi.fn() };
+    const generateStory = vi
+      .fn()
+      .mockRejectedValue(new Error("invalid ai payload"));
+
+    await processStoryGenerationMessage({
+      env: makeEnv({ queue }),
+      payload: {
+        taskId: "task-1",
+        petId: "pet-1",
+        userId: "user-1",
+        scheduledFor: new Date("2026-04-05T10:20:00.000Z").getTime(),
+      },
+      repo,
+      generateStory,
+    });
+
+    expect(queue.send).toHaveBeenCalledWith(
+      {
+        taskId: "task-2",
+        petId: "pet-1",
+        userId: "user-1",
+        scheduledFor: new Date("2026-04-05T10:30:00.000Z").getTime(),
+      },
+      expect.objectContaining({ delaySeconds: expect.any(Number) }),
+    );
   });
 });

@@ -1,4 +1,6 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
+import type { DrizzleD1Database } from "drizzle-orm/d1";
 import {
   inventory as inventoryTable,
   pet as petTable,
@@ -9,26 +11,9 @@ import {
 import type { ActiveChainHead } from "./types";
 import { getDb } from "../db";
 
-type InsertableDb = {
-  select?: any;
-  insert?: any;
-  update?: any;
-  batch?: any;
-  activeChain?: ActiveChainHead["chain"];
-  activeTask?: ActiveChainHead["task"];
-};
-
-function isFakeDb(db: InsertableDb): boolean {
-  return typeof db.select !== "function" || typeof db.batch !== "function";
-}
-
-export function createStoryGenerationRepository(db: InsertableDb) {
+export function createStoryGenerationRepository(db: DrizzleD1Database) {
   return {
     async getPetForFeed(playerId: string) {
-      if (isFakeDb(db)) {
-        return null;
-      }
-
       const pets = await db
         .select()
         .from(petTable)
@@ -39,10 +24,6 @@ export function createStoryGenerationRepository(db: InsertableDb) {
     },
 
     async listRecentVisibleStories(petId: string) {
-      if (isFakeDb(db)) {
-        return [];
-      }
-
       return db
         .select()
         .from(storyTable)
@@ -52,7 +33,7 @@ export function createStoryGenerationRepository(db: InsertableDb) {
     },
 
     async consumeStories(input: { storyIds: string[]; consumedAt: number }) {
-      if (input.storyIds.length === 0 || isFakeDb(db)) {
+      if (input.storyIds.length === 0) {
         return;
       }
 
@@ -66,7 +47,7 @@ export function createStoryGenerationRepository(db: InsertableDb) {
       petId: string;
       itemCounts: Map<string, number>;
     }) {
-      if (input.itemCounts.size === 0 || isFakeDb(db)) {
+      if (input.itemCounts.size === 0) {
         return;
       }
 
@@ -80,14 +61,10 @@ export function createStoryGenerationRepository(db: InsertableDb) {
         .where(eq(inventoryTable.petId, input.petId));
 
       const existingMap = new Map(
-        (existingInventory as Array<{
-          id: string;
-          itemId: string;
-          quantity: number;
-        }>).map((inventory) => [inventory.itemId, inventory]),
+        existingInventory.map((inventory) => [inventory.itemId, inventory]),
       );
 
-      const queries: unknown[] = [];
+      const queries: BatchItem<"sqlite">[] = [];
       const inserts: Array<{
         id: string;
         petId: string;
@@ -119,31 +96,28 @@ export function createStoryGenerationRepository(db: InsertableDb) {
       }
 
       if (queries.length > 0) {
-        await db.batch(queries);
+        await db.batch(
+          queries as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]],
+        );
       }
     },
 
-    async getActiveChainHeadForUser(userId: string): Promise<ActiveChainHead | null> {
-      if (db.activeChain && db.activeTask) {
-        return {
-          chain: db.activeChain,
-          task: db.activeTask,
-        };
-      }
-
-      if (isFakeDb(db)) {
-        return null;
-      }
-
+    async getActiveChainHeadForUser(
+      userId: string,
+    ): Promise<ActiveChainHead | null> {
       const chains = await db
         .select()
         .from(storyGenerationChain)
-        .where(eq(storyGenerationChain.userId, userId))
-        .orderBy(desc(storyGenerationChain.updatedAt))
+        .where(
+          and(
+            eq(storyGenerationChain.userId, userId),
+            eq(storyGenerationChain.status, "active"),
+          ),
+        )
         .limit(1);
 
       const chain = chains[0];
-      if (!chain || chain.status !== "active" || !chain.activeTaskId) {
+      if (!chain || !chain.activeTaskId) {
         return null;
       }
 
@@ -179,6 +153,48 @@ export function createStoryGenerationRepository(db: InsertableDb) {
       };
     },
 
+    async failStaleActiveChainForUser(userId: string) {
+      const chains = await db
+        .select()
+        .from(storyGenerationChain)
+        .where(
+          and(
+            eq(storyGenerationChain.userId, userId),
+            eq(storyGenerationChain.status, "active"),
+          ),
+        )
+        .limit(1);
+
+      const chain = chains[0];
+      if (!chain) {
+        return false;
+      }
+
+      let hasLiveTask = false;
+      if (chain.activeTaskId) {
+        const tasks = await db
+          .select()
+          .from(storyGenerationTask)
+          .where(eq(storyGenerationTask.id, chain.activeTaskId))
+          .limit(1);
+        hasLiveTask = ["queued", "running"].includes(tasks[0]?.status ?? "");
+      }
+
+      if (hasLiveTask) {
+        return false;
+      }
+
+      await db
+        .update(storyGenerationChain)
+        .set({
+          activeTaskId: null,
+          status: "failed",
+        })
+        .where(eq(storyGenerationChain.id, chain.id));
+
+      return true;
+    },
+
     async bootstrapChain(input: {
       userId: string;
       petId: string;
@@ -196,37 +212,47 @@ export function createStoryGenerationRepository(db: InsertableDb) {
       const taskId = crypto.randomUUID();
       const scheduledFor = input.now + input.minDelaySeconds * 1000;
 
-      if (!isFakeDb(db)) {
-        try {
-          await db.batch([
-            db.insert(storyGenerationChain).values({
-              id: chainId,
-              userId: input.userId,
-              petId: input.petId,
-              status: "active",
-              remainingGenerations: input.generationBudget,
-              remainingRetries: input.retryBudget,
-              activeTaskId: taskId,
-            }),
-            db.insert(storyGenerationTask).values({
-              id: taskId,
-              chainId,
-              userId: input.userId,
-              petId: input.petId,
-              status: "queued",
-              scheduledFor: new Date(scheduledFor),
-            }),
-          ]);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (message.includes("story_generation_chain_user_active_unique")) {
-            const raceWinner = await this.getActiveChainHeadForUser(input.userId);
-            if (raceWinner) {
-              return raceWinner;
-            }
+      try {
+        await db.batch([
+          db.insert(storyGenerationChain).values({
+            id: chainId,
+            userId: input.userId,
+            petId: input.petId,
+            status: "active",
+            remainingGenerations: input.generationBudget,
+            remainingRetries: input.retryBudget,
+            activeTaskId: taskId,
+          }),
+          db.insert(storyGenerationTask).values({
+            id: taskId,
+            chainId,
+            userId: input.userId,
+            petId: input.petId,
+            status: "queued",
+            scheduledFor: new Date(scheduledFor),
+          }),
+        ]);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        if (
+          message.includes("story_generation_chain_user_active_unique") ||
+          message.includes("UNIQUE constraint failed: story_generation_chain.user_id")
+        ) {
+          const raceWinner = await this.getActiveChainHeadForUser(
+            input.userId,
+          );
+          if (raceWinner) {
+            return raceWinner;
           }
-          throw error;
+          const recoveredStaleChain = await this.failStaleActiveChainForUser(
+            input.userId,
+          );
+          if (recoveredStaleChain) {
+            return this.bootstrapChain(input);
+          }
         }
+        throw error;
       }
 
       return {
@@ -250,10 +276,6 @@ export function createStoryGenerationRepository(db: InsertableDb) {
       generationBudget: number;
       retryBudget: number;
     }) {
-      if (isFakeDb(db)) {
-        return;
-      }
-
       await db
         .update(storyGenerationChain)
         .set({
@@ -264,10 +286,6 @@ export function createStoryGenerationRepository(db: InsertableDb) {
     },
 
     async getTaskForProcessing(taskId: string) {
-      if (isFakeDb(db)) {
-        return null;
-      }
-
       const tasks = await db
         .select()
         .from(storyGenerationTask)
@@ -291,10 +309,6 @@ export function createStoryGenerationRepository(db: InsertableDb) {
     },
 
     async markTaskRunning(taskId: string) {
-      if (isFakeDb(db)) {
-        return;
-      }
-
       await db
         .update(storyGenerationTask)
         .set({ status: "running", startedAt: new Date() })
@@ -317,24 +331,23 @@ export function createStoryGenerationRepository(db: InsertableDb) {
       itemsFound: string[];
       proposedNextAt: number | null;
     }) {
-      if (isFakeDb(db)) {
-        return {
-          storyTime: args.task.scheduledFor,
-          remainingGenerations: 0,
-        };
-      }
-
       const storyId = crypto.randomUUID();
+
+      // Atomic decrement to avoid read-then-write race
+      await db
+        .update(storyGenerationChain)
+        .set({
+          remainingGenerations: sql`MAX(0, ${storyGenerationChain.remainingGenerations} - 1)`,
+          lastStoryAt: new Date(args.task.scheduledFor),
+        })
+        .where(eq(storyGenerationChain.id, args.task.chainId));
+
       const chains = await db
-        .select()
+        .select({ remainingGenerations: storyGenerationChain.remainingGenerations })
         .from(storyGenerationChain)
         .where(eq(storyGenerationChain.id, args.task.chainId))
         .limit(1);
-      const chain = chains[0];
-      const remainingGenerations = Math.max(
-        0,
-        (chain?.remainingGenerations ?? 0) - 1,
-      );
+      const remainingGenerations = chains[0]?.remainingGenerations ?? 0;
 
       await db.batch([
         db.insert(storyTable).values({
@@ -348,7 +361,9 @@ export function createStoryGenerationRepository(db: InsertableDb) {
           activityType: args.activityType,
           story: args.story,
           itemsFound:
-            args.itemsFound.length > 0 ? JSON.stringify(args.itemsFound) : null,
+            args.itemsFound.length > 0
+              ? JSON.stringify(args.itemsFound)
+              : null,
           metadataJson: args.proposedNextAt
             ? JSON.stringify({ proposedNextAt: args.proposedNextAt })
             : null,
@@ -367,8 +382,6 @@ export function createStoryGenerationRepository(db: InsertableDb) {
         db
           .update(storyGenerationChain)
           .set({
-            remainingGenerations,
-            lastStoryAt: new Date(args.task.scheduledFor),
             activeTaskId: remainingGenerations > 0 ? args.task.id : null,
             status: remainingGenerations > 0 ? "active" : "completed",
           })
@@ -386,10 +399,6 @@ export function createStoryGenerationRepository(db: InsertableDb) {
       parentTaskId: string;
       scheduledFor: number;
     }) {
-      if (isFakeDb(db)) {
-        return { id: crypto.randomUUID() };
-      }
-
       const tasks = await db
         .select()
         .from(storyGenerationTask)
@@ -410,7 +419,7 @@ export function createStoryGenerationRepository(db: InsertableDb) {
           parentTaskId: args.parentTaskId,
           status: "queued",
           scheduledFor: new Date(args.scheduledFor),
-          attemptNumber: parentTask.attemptNumber + 1,
+          attemptNumber: 1,
         }),
         db
           .update(storyGenerationChain)
@@ -426,10 +435,6 @@ export function createStoryGenerationRepository(db: InsertableDb) {
     },
 
     async markTaskInvalid(input: { taskId: string; failureReason: string }) {
-      if (isFakeDb(db)) {
-        return;
-      }
-
       const tasks = await db
         .select()
         .from(storyGenerationTask)
@@ -440,15 +445,32 @@ export function createStoryGenerationRepository(db: InsertableDb) {
         return;
       }
 
+      // Atomic decrement to avoid read-then-write race
+      await db
+        .update(storyGenerationChain)
+        .set({
+          remainingRetries: sql`MAX(0, ${storyGenerationChain.remainingRetries} - 1)`,
+        })
+        .where(eq(storyGenerationChain.id, task.chainId));
+
       const chains = await db
-        .select()
+        .select({ remainingRetries: storyGenerationChain.remainingRetries })
         .from(storyGenerationChain)
         .where(eq(storyGenerationChain.id, task.chainId))
         .limit(1);
-      const chain = chains[0];
-      const remainingRetries = Math.max(0, (chain?.remainingRetries ?? 0) - 1);
+      const remainingRetries = chains[0]?.remainingRetries ?? 0;
+      const retryScheduledFor = Date.now() + 60_000;
+      const retryTask =
+        remainingRetries > 0
+          ? {
+              id: crypto.randomUUID(),
+              petId: task.petId,
+              userId: task.userId,
+              scheduledFor: retryScheduledFor,
+            }
+          : null;
 
-      await db.batch([
+      const queries: BatchItem<"sqlite">[] = [
         db
           .update(storyGenerationTask)
           .set({
@@ -457,19 +479,49 @@ export function createStoryGenerationRepository(db: InsertableDb) {
             finishedAt: new Date(),
           })
           .where(eq(storyGenerationTask.id, input.taskId)),
+      ];
+
+      if (retryTask) {
+        queries.push(
+          db.insert(storyGenerationTask).values({
+            id: retryTask.id,
+            chainId: task.chainId,
+            userId: task.userId,
+            petId: task.petId,
+            parentTaskId: task.id,
+            status: "queued",
+            scheduledFor: new Date(retryScheduledFor),
+            attemptNumber: task.attemptNumber + 1,
+          }),
+        );
+      }
+
+      queries.push(
         db
           .update(storyGenerationChain)
           .set({
-            remainingRetries,
-            activeTaskId: null,
-            status: remainingRetries > 0 ? "active" : "failed",
+            activeTaskId: retryTask?.id ?? null,
+            nextNotBeforeAt: retryTask ? new Date(retryScheduledFor) : null,
+            status: retryTask ? "active" : "failed",
           })
           .where(eq(storyGenerationChain.id, task.chainId)),
-      ]);
+      );
+
+      await db.batch(
+        queries as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]],
+      );
+
+      return { retryTask };
     },
   };
 }
 
-export function createStoryGenerationRepositoryFromEnv(env: CloudflareBindings) {
+export type StoryGenerationRepository = ReturnType<
+  typeof createStoryGenerationRepository
+>;
+
+export function createStoryGenerationRepositoryFromEnv(
+  env: CloudflareBindings,
+) {
   return createStoryGenerationRepository(getDb(env));
 }

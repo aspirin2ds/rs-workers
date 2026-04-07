@@ -1,5 +1,6 @@
 import { resolveNextStoryTime } from "./next-time";
 import { createStoryGenerationRepositoryFromEnv } from "./repository";
+import type { StoryGenerationRepository } from "./repository";
 import type { AiStoryResponse, StoryQueueMessage } from "./types";
 
 export type GenerateStoryFn = (
@@ -17,46 +18,14 @@ function buildStoryPrompt(task: {
 export async function processStoryGenerationMessage(input: {
   env: CloudflareBindings;
   payload: StoryQueueMessage;
-  repo: {
-    getTaskForProcessing: (taskId: string) => Promise<{
-      id: string;
-      chainId: string;
-      petId: string;
-      userId: string;
-      scheduledFor: number;
-      createdStoryId: string | null;
-      status: string;
-    } | null>;
-    markTaskRunning: (taskId: string) => Promise<unknown>;
-    completeSuccessfulTask: (args: {
-      task: {
-        id: string;
-        chainId: string;
-        petId: string;
-        userId: string;
-        scheduledFor: number;
-        createdStoryId: string | null;
-        status: string;
-      };
-      story: string;
-      activityType: string | null;
-      location: string | null;
-      itemsFound: string[];
-      proposedNextAt: number | null;
-    }) => Promise<{
-      storyTime: number;
-      remainingGenerations: number;
-    }>;
-    enqueueNextTask: (args: {
-      chainId: string;
-      parentTaskId: string;
-      scheduledFor: number;
-    }) => Promise<{ id: string }>;
-    markTaskInvalid?: (args: {
-      taskId: string;
-      failureReason: string;
-    }) => Promise<unknown>;
-  };
+  repo: Pick<
+    StoryGenerationRepository,
+    | "getTaskForProcessing"
+    | "markTaskRunning"
+    | "completeSuccessfulTask"
+    | "enqueueNextTask"
+    | "markTaskInvalid"
+  >;
   generateStory: GenerateStoryFn;
 }) {
   const task = await input.repo.getTaskForProcessing(input.payload.taskId);
@@ -67,7 +36,10 @@ export async function processStoryGenerationMessage(input: {
   await input.repo.markTaskRunning(task.id);
 
   try {
-    const result = await input.generateStory(input.env, buildStoryPrompt(input.payload));
+    const result = await input.generateStory(
+      input.env,
+      buildStoryPrompt(input.payload),
+    );
     const story = await input.repo.completeSuccessfulTask({
       task,
       story: result.story,
@@ -81,8 +53,8 @@ export async function processStoryGenerationMessage(input: {
       const nextScheduledFor = resolveNextStoryTime({
         storyTime: story.storyTime,
         proposedNextAt: result.proposedNextAt ?? null,
-        minDelaySeconds: input.env.STORY_MIN_DELAY_SECONDS,
-        maxDelaySeconds: input.env.STORY_MAX_DELAY_SECONDS,
+        minDelaySeconds: Number(input.env.STORY_MIN_DELAY_SECONDS),
+        maxDelaySeconds: Number(input.env.STORY_MAX_DELAY_SECONDS),
       });
       const nextTask = await input.repo.enqueueNextTask({
         chainId: task.chainId,
@@ -105,11 +77,25 @@ export async function processStoryGenerationMessage(input: {
       );
     }
   } catch (error) {
-    if (input.repo.markTaskInvalid) {
-      await input.repo.markTaskInvalid({
-        taskId: input.payload.taskId,
-        failureReason: error instanceof Error ? error.message : String(error),
-      });
+    const invalidResult = await input.repo.markTaskInvalid({
+      taskId: input.payload.taskId,
+      failureReason: error instanceof Error ? error.message : String(error),
+    });
+    if (invalidResult?.retryTask) {
+      await input.env.STORY_QUEUE.send(
+        {
+          taskId: invalidResult.retryTask.id,
+          petId: invalidResult.retryTask.petId,
+          userId: invalidResult.retryTask.userId,
+          scheduledFor: invalidResult.retryTask.scheduledFor,
+        },
+        {
+          delaySeconds: Math.max(
+            0,
+            Math.floor((invalidResult.retryTask.scheduledFor - Date.now()) / 1000),
+          ),
+        },
+      );
     }
   }
 }
@@ -121,12 +107,16 @@ export async function processStoryGenerationBatch(
   generateStory: GenerateStoryFn,
 ) {
   for (const message of batch.messages) {
-    await processStoryGenerationMessage({
-      env,
-      payload: message.body,
-      repo: createStoryGenerationRepositoryFromEnv(env),
-      generateStory,
-    });
-    message.ack();
+    try {
+      await processStoryGenerationMessage({
+        env,
+        payload: message.body,
+        repo: createStoryGenerationRepositoryFromEnv(env),
+        generateStory,
+      });
+      message.ack();
+    } catch {
+      message.retry();
+    }
   }
 }

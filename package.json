@@ -5,7 +5,6 @@
     "dev": "turbo dev",
     "deploy": "turbo deploy:cf",
     "deploy:auth": "pnpm --filter @repo/auth-worker deploy:cf",
-    "deploy:pebble": "pnpm --filter @repo/pebble-worker deploy:cf",
     "test": "turbo test",
     "test:watch": "turbo test:watch",
     "typecheck": "turbo typecheck",

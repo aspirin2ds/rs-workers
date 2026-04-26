@@ -7,7 +7,7 @@ A monorepo of Cloudflare Workers for the RS platform, managed with [Turborepo](h
 ```
 rs-workers/
 ├── workers/
-│   └── auth        # Authentication worker (Better Auth, MCP, OAuth)
+│   └── auth        # Authentication worker (Better Auth)
 ├── packages/
 │   └── db          # Shared database package (Drizzle ORM + D1)
 ├── turbo.json
@@ -16,29 +16,20 @@ rs-workers/
 
 ### `workers/auth`
 
-Authentication and authorization worker built with [Hono](https://hono.dev/), [Better Auth](https://www.better-auth.com/), and the [MCP SDK](https://modelcontextprotocol.io/). Provides OAuth, session management, and admin tools via MCP.
+Authentication and authorization worker built with [Hono](https://hono.dev/) and [Better Auth](https://www.better-auth.com/). Provides Better Auth routes and session management.
 
-**Bindings:** Cloudflare D1 (`RS_DB`), KV (`RS_KV`, `OAUTH_KV`)
+**Bindings:** Cloudflare D1 (`DB`), KV (`KV`)
 
-### Codex plugin wrapper
+**Native iOS social login:** native apps should sign in with Google or Apple on-device, then send the provider ID token to Better Auth at `/api/auth/sign-in/social`. The auth worker verifies the provider token and creates the Better Auth session.
 
-This repo now includes a repo-local Codex plugin wrapper for the auth MCP server at `plugins/rollingsagas`.
+Required/optional secrets:
 
-- Plugin manifest: `plugins/rollingsagas/.codex-plugin/plugin.json`
-- MCP registration: `plugins/rollingsagas/.mcp.json`
-- Skills: `plugins/rollingsagas/skills/`
-- Marketplace entry: `.agents/plugins/marketplace.json`
-
-Before installing the plugin, replace the `https://[TODO: ...]` placeholders in the plugin manifest and MCP config with the deployed auth worker domain. The MCP endpoint should point at `/mcp`, which is already exposed by the auth worker's `OAuthProvider`.
-
-After reinstalling or reloading the plugin in Codex, the plugin exposes MCP-backed skills for:
-
-- inspecting the current auth session
-- listing and searching RS users
-- creating users and changing roles
-- banning, unbanning, and revoking sessions
-
-The plugin is now skill-first rather than slash-command-first, which matches the structure used by Cloudflare's [`skills`](https://github.com/cloudflare/skills) repository.
+- `GOOGLE_CLIENT_ID`: Google web OAuth client ID, used by the existing web OAuth redirect flow.
+- `GOOGLE_CLIENT_SECRET`: Google web OAuth client secret.
+- `GOOGLE_IOS_CLIENT_ID`: optional Google iOS OAuth client ID accepted for native ID-token sign-in.
+- `APPLE_CLIENT_ID`: Apple Service ID used by Better Auth's Apple provider.
+- `APPLE_CLIENT_SECRET`: Apple client-secret JWT for the Service ID.
+- `APPLE_APP_BUNDLE_IDENTIFIER`: Apple native iOS app bundle ID, required so Better Auth accepts native Apple ID tokens whose audience is the app bundle ID.
 
 ### `packages/db`
 

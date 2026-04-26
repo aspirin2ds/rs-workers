@@ -3,28 +3,23 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "build:css": "tailwindcss -i src/styles.css -o src/generated/styles.css --minify",
-    "dev": "pnpm run build:css && wrangler dev --remote",
-    "deploy:cf": "pnpm run build:css && pnpm run cf-typegen && wrangler deploy --minify",
+    "dev": "wrangler dev --remote",
+    "deploy:cf": "pnpm run cf-typegen && wrangler deploy --minify",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
     "typecheck": "tsc --noEmit",
     "auth:schema": "pnpm dlx @better-auth/cli@latest generate --config ./better-auth.config.ts --output ../../packages/db/src/schema.ts"
   },
   "dependencies": {
-    "@cloudflare/workers-oauth-provider": "^0.4.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "@repo/db": "workspace:*",
-    "agents": "^0.9.0",
     "better-auth": "^1.5.6",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.9",
+    "jose": "^6.2.2",
     "resend": "^6.10.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@tailwindcss/cli": "^4.2.2",
     "@types/node": "^25.5.0",
-    "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2",
     "wrangler": "^4.4.0"
   }

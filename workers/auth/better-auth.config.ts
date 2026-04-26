@@ -38,6 +38,11 @@ export const auth = betterAuth({
     BETTER_AUTH_URL ? new URL(BETTER_AUTH_URL).origin : "",
     "https://appleid.apple.com",
   ].filter(Boolean),
+  advanced: {
+    ipAddress: {
+      ipAddressHeaders: ["cf-connecting-ip"],
+    },
+  },
   plugins: [
     emailOTP({
       sendVerificationOTP: async () => {},

@@ -115,6 +115,11 @@ export const auth = (env: CloudflareBindings) => {
       ...(appleProvider ? { apple: appleProvider } : {}),
     },
     trustedOrigins: [getAllowedOrigin(env), APPLE_TRUSTED_ORIGIN],
+    advanced: {
+      ipAddress: {
+        ipAddressHeaders: ["cf-connecting-ip"],
+      },
+    },
     secondaryStorage: {
       get: async (key) => await env.KV.get(key),
       set: async (key, value, ttl) => {

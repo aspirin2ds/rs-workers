@@ -31,6 +31,26 @@ Required/optional secrets:
 - `APPLE_CLIENT_SECRET`: Apple client-secret JWT for the Service ID.
 - `APPLE_APP_BUNDLE_IDENTIFIER`: Apple native iOS app bundle ID, required so Better Auth accepts native Apple ID tokens whose audience is the app bundle ID.
 
+Web Google sign-in should use Better Auth's redirect flow:
+
+```ts
+await authClient.signIn.social({
+  provider: "google",
+  callbackURL: "/dashboard",
+});
+```
+
+Native iOS Google sign-in should get an ID token from Google Sign-In on-device and pass it to Better Auth:
+
+```ts
+await authClient.signIn.social({
+  provider: "google",
+  idToken: { token: googleIdToken },
+});
+```
+
+The auth worker keeps `GOOGLE_CLIENT_ID` as the web OAuth client for redirect sign-in and verifies native Google ID tokens against both `GOOGLE_CLIENT_ID` and `GOOGLE_IOS_CLIENT_ID`.
+
 ### `packages/db`
 
 Shared database schema and migrations using [Drizzle ORM](https://orm.drizzle.team/) with Cloudflare D1.

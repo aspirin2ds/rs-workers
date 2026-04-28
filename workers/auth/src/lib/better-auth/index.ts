@@ -242,12 +242,12 @@ export const auth = (env: CloudflareBindings) => {
       },
       ...(appleProvider
         ? {
-            apple: {
-              ...appleProvider,
-              verifyIdToken: (token, nonce) =>
-                verifyAppleIdToken(env, token, nonce),
-            },
-          }
+          apple: {
+            ...appleProvider,
+            verifyIdToken: (token, nonce) =>
+              verifyAppleIdToken(env, token, nonce),
+          },
+        }
         : {}),
     },
     trustedOrigins: [getAllowedOrigin(env), APPLE_TRUSTED_ORIGIN],
@@ -263,7 +263,13 @@ export const auth = (env: CloudflareBindings) => {
           expirationTtl: ttl ? Math.max(ttl, KV_MIN_TTL) : undefined,
         });
       },
-      delete: async (key) => await env.KV.delete(key),
+      delete: async (key) => {
+        try {
+          await env.KV.delete(key)
+        } catch (e) {
+          console.error(e)
+        }
+      }
     },
     session: {
       cookieCache: {

@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { basename, resolve } from "node:path";
+
 export type ChatMessageContentPart =
   | {
       type: "text";
@@ -41,28 +44,89 @@ export function buildMessages(systemPrompt: string, turns: PromptTurn[]): ChatMe
   ];
 }
 
-export async function* streamChat(
+export type ChatRequestAttachments = {
+  prompt?: string;
+  image?: string[];
+  audio?: string[];
+  imageDetail: "auto" | "low" | "high";
+};
+
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+const AUDIO_MIME_TYPES: Record<string, string> = {
+  ".wav": "audio/wav",
+  ".mp3": "audio/mpeg",
+  ".flac": "audio/flac",
+  ".opus": "audio/opus",
+  ".ogg": "audio/ogg",
+  ".aac": "audio/aac",
+  ".m4a": "audio/mp4",
+};
+
+function getMimeType(filePath: string, kinds: Record<string, string>, label: string): string {
+  const lastDot = filePath.lastIndexOf(".");
+  const extension = lastDot === -1 ? "" : filePath.slice(lastDot).toLowerCase();
+  const mimeType = kinds[extension];
+  if (!mimeType) {
+    throw new Error(`Unsupported ${label} file type: ${filePath}`);
+  }
+  return mimeType;
+}
+
+export async function* streamSSML(
   baseUrl: string,
   token: string,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  attachments: ChatRequestAttachments
 ): AsyncGenerator<string> {
-  const response = await fetch(`${baseUrl}/chat`, {
+  const formData = new FormData();
+  formData.set("messages", JSON.stringify(messages));
+  if (attachments.prompt?.trim()) {
+    formData.set("prompt", attachments.prompt.trim());
+  }
+  formData.set("imageDetail", attachments.imageDetail);
+
+  for (const filePath of attachments.image ?? []) {
+    const absolutePath = resolve(filePath);
+    const bytes = await readFile(absolutePath);
+    formData.append(
+      "images",
+      new Blob([bytes], { type: getMimeType(absolutePath, IMAGE_MIME_TYPES, "image") }),
+      basename(absolutePath)
+    );
+  }
+
+  for (const filePath of attachments.audio ?? []) {
+    const absolutePath = resolve(filePath);
+    const bytes = await readFile(absolutePath);
+    formData.append(
+      "audios",
+      new Blob([bytes], { type: getMimeType(absolutePath, AUDIO_MIME_TYPES, "audio") }),
+      basename(absolutePath)
+    );
+  }
+
+  const response = await fetch(`${baseUrl}/v1/generate/ssml`, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ messages }),
+    body: formData,
   });
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(
-      `Chat failed: ${response.status} ${response.statusText}${detail ? ` — ${detail}` : ""}`
+      `SSML generation failed: ${response.status} ${response.statusText}${detail ? ` — ${detail}` : ""}`
     );
   }
   if (!response.body) {
-    throw new Error("Chat response has no body");
+    throw new Error("SSML generation response has no body");
   }
 
   const reader = response.body.getReader();

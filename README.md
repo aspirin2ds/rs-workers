@@ -51,6 +51,20 @@ await authClient.signIn.social({
 
 The auth worker keeps `GOOGLE_CLIENT_ID` as the web OAuth client for redirect sign-in and verifies native Google ID tokens against both `GOOGLE_CLIENT_ID` and `GOOGLE_IOS_CLIENT_ID`.
 
+### `workers/maid`
+
+Authenticated application API worker.
+
+Required/optional secrets and vars:
+
+- `MMCF_API_KEY`: upstream MMCF API key used by `POST /v1/generate/mmcf`.
+- `MMCF_UPSTREAM_BASE_URL`: optional upstream MMCF base URL. Defaults to `https://maid-aiproxy-dev.semigraph.net`.
+
+Endpoints:
+
+- `POST /v1/generate/ssml`: authenticated multipart generation endpoint that returns an SSE model stream constrained to SSML output.
+- `POST /v1/generate/mmcf`: authenticated MMCF proxy endpoint that forwards JSON SSML generation requests to the upstream MMCF service and streams MMCF bytes back.
+
 ### `packages/db`
 
 Shared database schema and migrations using [Drizzle ORM](https://orm.drizzle.team/) with Cloudflare D1.

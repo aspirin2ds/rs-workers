@@ -20,7 +20,7 @@ import {
   buildMessages,
   type ChatMessageContentPart,
   type PromptTurn,
-  streamChat,
+  streamSSML,
 } from "./maid.js";
 
 const DEFAULT_MAID_URL = process.env.MAID_API_URL ?? "http://localhost:8788";
@@ -310,8 +310,9 @@ program
   });
 
 program
-  .command("chat")
-  .description("Interactive or one-shot chat with Workers AI Gemma via the maid worker")
+  .command("ssml")
+  .alias("chat")
+  .description("Interactive or one-shot SSML generation via the maid worker")
   .option("--maid-url <url>", "maid worker base URL", DEFAULT_MAID_URL)
   .option(
     "--system <prompt>",
@@ -353,24 +354,26 @@ program
       typeof opts.prompt === "string" || opts.image.length > 0 || opts.audio.length > 0;
 
     if (hasOneShotInput) {
-      const userContent = await buildUserTurnContent({
+      await buildUserTurnContent({
         prompt: opts.prompt,
         image: opts.image,
         audio: opts.audio,
         imageDetail,
       });
-      turns.push({ role: "user", content: userContent });
-      let assistant = "";
-      const messages = buildMessages(opts.system, turns);
-      for await (const tok of streamChat(maidUrl, token, messages)) {
+      const messages = buildMessages(opts.system, []);
+      for await (const tok of streamSSML(maidUrl, token, messages, {
+        prompt: opts.prompt,
+        image: opts.image,
+        audio: opts.audio,
+        imageDetail,
+      })) {
         process.stdout.write(tok);
-        assistant += tok;
       }
       process.stdout.write("\n");
       return;
     }
 
-    console.log("Chat with Gemma. Empty line, 'exit', or Ctrl-C to quit.\n");
+    console.log("Generate SSML. Empty line, 'exit', or Ctrl-C to quit.\n");
     console.log(
       "Commands: /image <path>, /audio <path>, /attachments, /clearattachments, /send\n"
     );
@@ -451,7 +454,8 @@ program
         continue;
       }
 
-      turns.push({ role: "user", content: userContent });
+      const currentImages = [...pendingImages];
+      const currentAudio = [...pendingAudio];
       pendingImages.length = 0;
       pendingAudio.length = 0;
       console.log(`you > ${describeContent(userContent)}`);
@@ -459,16 +463,21 @@ program
       let assistant = "";
       try {
         const messages = buildMessages(opts.system, turns);
-        for await (const tok of streamChat(maidUrl, token, messages)) {
+        for await (const tok of streamSSML(maidUrl, token, messages, {
+          prompt: wantsAttachmentOnlySend ? undefined : trimmed,
+          image: currentImages,
+          audio: currentAudio,
+          imageDetail,
+        })) {
           process.stdout.write(tok);
           assistant += tok;
         }
         process.stdout.write("\n\n");
+        turns.push({ role: "user", content: userContent });
         turns.push({ role: "assistant", content: assistant });
       } catch (err) {
         process.stdout.write("\n");
         console.error(`[error] ${(err as Error).message}\n`);
-        turns.pop();
       }
     }
     }

@@ -18,7 +18,7 @@
     {
       "binding": "DB",
       "database_name": "maid-db",
-      "database_id": "7b7aa09c-0702-4b2b-a48a-cfdba7e2fe96",
+      "database_id": "e2e775fb-95f2-47fc-ab30-e22bfd39e3f3",
       "migrations_dir": "../../packages/db/drizzle",
       "remote": true
     }
@@ -29,5 +29,5 @@
       "id": "f8046ff678774a5ab4d8bf49e3a4b60a",
       "remote": true
     }
-  ]
+  ],
 }

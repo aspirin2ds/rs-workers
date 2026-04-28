@@ -23,9 +23,20 @@ export type AuthEnv = {
 };
 
 async function fetchSession(c: Context<AuthEnv>): Promise<AuthSession | null> {
+  const headers = new Headers();
+  const authorization = c.req.header("authorization");
+  const origin = c.req.header("origin");
+  if (authorization) {
+    headers.set("authorization", authorization);
+  }
+  headers.set("accept", "application/json");
+  if (origin) {
+    headers.set("origin", origin);
+  }
+
   const request = new Request("https://auth.internal/api/auth/get-session", {
     method: "GET",
-    headers: c.req.raw.headers,
+    headers,
   });
 
   const response = await c.env.AUTH.fetch(request);

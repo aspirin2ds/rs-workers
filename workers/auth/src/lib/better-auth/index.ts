@@ -1,9 +1,12 @@
 import { betterAuth } from "better-auth";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { emailOTP } from "better-auth/plugins";
 import { admin } from "better-auth/plugins";
 import { bearer } from "better-auth/plugins";
+import { drizzle } from "drizzle-orm/d1";
 import { Resend } from "resend";
 import { decodeProtectedHeader, importJWK, jwtVerify } from "jose";
+import * as schema from "@repo/db/schema";
 import { betterAuthOptions } from "./options";
 
 const KV_MIN_TTL = 60;
@@ -230,7 +233,10 @@ export const auth = (env: CloudflareBindings) => {
 
   return betterAuth({
     ...betterAuthOptions,
-    database: env.DB,
+    database: drizzleAdapter(drizzle(env.DB, { schema }), {
+      provider: "sqlite",
+      schema,
+    }),
     baseURL: env.BETTER_AUTH_URL,
     secret: env.BETTER_AUTH_SECRET,
     socialProviders: {

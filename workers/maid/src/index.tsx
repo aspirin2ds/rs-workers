@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 import { authMiddleware, type AuthEnv } from "./middleware/auth";
 
-const CHAT_MODEL = "@cf/google/gemma-4-26b-a4b-it";
 const DEFAULT_MMCF_UPSTREAM_BASE_URL = "https://maid-aiproxy-dev.semigraph.net";
+const DEFAULT_OLLAMA_BASE_URL = "https://ollm23.semigraphs.com";
+const DEFAULT_OLLAMA_MODEL = "gemma4:e4b";
 const SSML_GENERATION_PROMPT =
   [
     "You are Ria, a 20-year-old beginner dance livestreamer with a shy, girl-next-door personality. You understand internet memes, but imperfectly. Speak naturally like a live streamer: playful, slightly awkward, and warm.",
@@ -42,21 +43,10 @@ const AUDIO_MIME_TO_FORMAT: Record<string, string> = {
   "audio/x-wav": "wav",
   "audio/mpeg": "mp3",
   "audio/mp3": "mp3",
-  "audio/flac": "flac",
-  "audio/ogg": "opus",
-  "audio/opus": "opus",
-  "audio/aac": "aac",
-  "audio/mp4": "aac",
-  "audio/x-m4a": "aac",
 };
 const AUDIO_EXTENSION_TO_FORMAT: Record<string, string> = {
   wav: "wav",
   mp3: "mp3",
-  flac: "flac",
-  opus: "opus",
-  ogg: "opus",
-  aac: "aac",
-  m4a: "aac",
 };
 
 const app = new Hono<AuthEnv>();
@@ -127,6 +117,8 @@ type ChatMessage = {
 type MMCFEnv = CloudflareBindings & {
   MMCF_API_KEY?: string;
   MMCF_UPSTREAM_BASE_URL?: string;
+  OLLAMA_BASE_URL?: string;
+  OLLAMA_MODEL?: string;
 };
 
 function getMMCFUpstreamBaseURL(env: CloudflareBindings): string {
@@ -146,6 +138,17 @@ function getMMCFUpstreamURL(env: CloudflareBindings, connectionKey: string | nul
     url.searchParams.set("connection_key", connectionKey);
   }
   return url.toString();
+}
+
+function getOllamaBaseURL(env: CloudflareBindings): string {
+  const rawBaseURL = (env as MMCFEnv).OLLAMA_BASE_URL?.trim();
+  const baseURL = rawBaseURL && rawBaseURL.length > 0 ? rawBaseURL : DEFAULT_OLLAMA_BASE_URL;
+  return baseURL.endsWith("/") ? baseURL.slice(0, -1) : baseURL;
+}
+
+function getOllamaModel(env: CloudflareBindings): string {
+  const rawModel = (env as MMCFEnv).OLLAMA_MODEL?.trim();
+  return rawModel && rawModel.length > 0 ? rawModel : DEFAULT_OLLAMA_MODEL;
 }
 
 function isTextPart(value: unknown): value is Extract<ChatMessageContentPart, { type: "text" }> {
@@ -226,6 +229,140 @@ function isChatMessage(value: unknown): value is ChatMessage {
   return Array.isArray(content) && content.length > 0 && content.every(isContentPart);
 }
 
+type OllamaMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+  images?: string[];
+};
+
+function extractBase64Payload(url: string): string | null {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const dataURLMatch = /^data:[^;]+;base64,(.+)$/i.exec(trimmed);
+  if (dataURLMatch?.[1]) {
+    return dataURLMatch[1];
+  }
+
+  const base64Like = /^[A-Za-z0-9+/]+={0,2}$/.test(trimmed) && trimmed.length % 4 === 0;
+  return base64Like ? trimmed : null;
+}
+
+function contentFallbackForParts(
+  role: ChatMessage["role"],
+  parts: ChatMessageContentPart[]
+): string | null {
+  if (role !== "user") {
+    return null;
+  }
+
+  const hasAudio = parts.some((part) => part.type === "input_audio");
+  if (hasAudio) {
+    return "Listen to the user's audio input and respond naturally.";
+  }
+
+  const hasImage = parts.some((part) => part.type === "image_url");
+  if (hasImage) {
+    return "Look at the user's image input and respond naturally.";
+  }
+
+  return null;
+}
+
+function toOllamaMessage(message: ChatMessage): OllamaMessage | null {
+  if (typeof message.content === "string") {
+    const trimmed = message.content.trim();
+    return trimmed.length > 0 ? { role: message.role, content: trimmed } : null;
+  }
+
+  const textParts: string[] = [];
+  const multimodalInputs: string[] = [];
+
+  for (const part of message.content) {
+    if (part.type === "text") {
+      const trimmed = part.text.trim();
+      if (trimmed.length > 0) {
+        textParts.push(trimmed);
+      }
+      continue;
+    }
+
+    if (part.type === "image_url") {
+      const payload = extractBase64Payload(part.image_url.url);
+      if (!payload) {
+        return null;
+      }
+      multimodalInputs.push(payload);
+      continue;
+    }
+
+    multimodalInputs.push(part.input_audio.data);
+  }
+
+  const content =
+    (textParts.length > 0 ? textParts.join("\n\n") : null) ??
+    contentFallbackForParts(message.role, message.content);
+  if (!content) {
+    return null;
+  }
+
+  return multimodalInputs.length > 0
+    ? { role: message.role, content, images: multimodalInputs }
+    : { role: message.role, content };
+}
+
+function toOllamaMessages(messages: ChatMessage[]): OllamaMessage[] | null {
+  const normalized: OllamaMessage[] = [];
+
+  for (const message of messages) {
+    const normalizedMessage = toOllamaMessage(message);
+    if (!normalizedMessage) {
+      return null;
+    }
+    normalized.push(normalizedMessage);
+  }
+
+  return normalized;
+}
+
+async function runOllamaChat(env: CloudflareBindings, messages: OllamaMessage[]): Promise<string> {
+  const response = await fetch(`${getOllamaBaseURL(env)}/api/chat`, {
+    method: "POST",
+    headers: {
+      "accept": "application/json",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: getOllamaModel(env),
+      messages,
+      stream: false,
+      think: false,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = (await response.text()).slice(0, 2048);
+    throw new Error(
+      `Ollama chat failed with HTTP ${response.status}${errorText ? `: ${errorText}` : ""}`
+    );
+  }
+
+  const body = (await response.json()) as {
+    message?: {
+      content?: string;
+    };
+  };
+
+  const content = body.message?.content?.trim();
+  if (!content) {
+    throw new Error("Ollama chat returned an empty response");
+  }
+
+  return content;
+}
+
 function toBase64(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) {
@@ -269,7 +406,9 @@ async function fileToAudioPart(
     (file.name ? AUDIO_EXTENSION_TO_FORMAT[getFileExtension(file.name) ?? ""] : undefined);
 
   if (!format) {
-    throw new Error(`Unsupported audio file type: ${file.name || file.type || "unknown"}`);
+    throw new Error(
+      `Unsupported audio file type: ${file.name || file.type || "unknown"}. Only WAV and MP3 are supported.`
+    );
   }
 
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -384,17 +523,40 @@ app.post("/v1/generate/ssml", async (c) => {
         : currentUserParts,
   });
 
-  const stream = (await c.env.AI.run(CHAT_MODEL as keyof AiModels, {
-    messages: [
-      { role: "system", content: SSML_GENERATION_PROMPT },
-      ...messages,
-    ],
-    stream: true,
-  })) as ReadableStream;
+  const ollamaMessages = toOllamaMessages([
+    { role: "system", content: SSML_GENERATION_PROMPT },
+    ...messages,
+  ]);
 
-  return new Response(stream, {
-    headers: { "content-type": "text/event-stream" },
-  });
+  if (!ollamaMessages) {
+    return c.json(
+      {
+        error:
+          "messages: unsupported multimodal content for Ollama chat. Use uploaded image/audio files or base64 data URLs.",
+      },
+      400
+    );
+  }
+
+  try {
+    const content = await runOllamaChat(c.env, ollamaMessages);
+    const stream = new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify({ response: content })}\n\n`)
+        );
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+
+    return new Response(stream, {
+      headers: { "content-type": "text/event-stream" },
+    });
+  } catch (error) {
+    return c.json({ error: (error as Error).message }, 502);
+  }
 });
 
 export default app;

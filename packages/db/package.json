@@ -7,8 +7,8 @@
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",
-    "db:migrate:local": "wrangler d1 migrations apply rs-db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply rs-db --remote"
+    "db:migrate:local": "wrangler d1 migrations apply maid-db --local --config ../../workers/auth/wrangler.jsonc",
+    "db:migrate:remote": "wrangler d1 migrations apply maid-db --remote --config ../../workers/auth/wrangler.jsonc"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2"

@@ -1,21 +1,17 @@
 {
-  "name": "@repo/auth-worker",
+  "name": "@repo/maid-worker",
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "wrangler dev --port 8787 --inspector-port 9229",
+    "dev": "wrangler dev --port 8788 --inspector-port 9230",
     "deploy:cf": "pnpm run cf-typegen && wrangler deploy --minify",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
-    "typecheck": "tsc --noEmit",
-    "auth:schema": "pnpm dlx @better-auth/cli@latest generate --config ./better-auth.config.ts --output ../../packages/db/src/schema.ts"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@repo/db": "workspace:*",
-    "better-auth": "^1.6.3",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.9",
-    "jose": "^6.2.2",
-    "resend": "^6.10.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

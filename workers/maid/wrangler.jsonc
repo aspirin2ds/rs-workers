@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "maid-auth",
+  "name": "maid-api",
   "main": "src/index.tsx",
   "compatibility_date": "2026-04-01",
   "compatibility_flags": [
@@ -28,6 +28,16 @@
       "binding": "KV",
       "id": "f8046ff678774a5ab4d8bf49e3a4b60a",
       "remote": true
+    }
+  ],
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
+  "services": [
+    {
+      "binding": "AUTH",
+      "service": "maid-auth"
     }
   ]
 }

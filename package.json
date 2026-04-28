@@ -1,10 +1,14 @@
 {
-  "name": "rs-workers",
+  "name": "maid-workers",
   "private": true,
   "scripts": {
     "dev": "turbo dev",
+    "dev:auth": "pnpm --filter @repo/auth-worker dev",
+    "dev:maid": "pnpm --filter @repo/maid-worker dev",
     "deploy": "turbo deploy:cf",
     "deploy:auth": "pnpm --filter @repo/auth-worker deploy:cf",
+    "deploy:maid": "pnpm --filter @repo/maid-worker deploy:cf",
+    "cli": "pnpm --filter @repo/cli start",
     "test": "turbo test",
     "test:watch": "turbo test:watch",
     "typecheck": "turbo typecheck",

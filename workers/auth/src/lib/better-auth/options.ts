@@ -1,7 +1,7 @@
 import type { BetterAuthOptions } from "better-auth";
 
 export const betterAuthOptions: BetterAuthOptions = {
-  appName: "rs-auth",
+  appName: "maid-auth",
   basePath: "/api/auth",
   emailAndPassword: {
     enabled: true,

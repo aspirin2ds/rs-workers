@@ -1,11 +1,11 @@
-# rs-workers
+# maid-workers
 
-A monorepo of Cloudflare Workers for the RS platform, managed with [Turborepo](https://turbo.build/) and [pnpm](https://pnpm.io/).
+A monorepo of Cloudflare Workers for the Maid platform, managed with [Turborepo](https://turbo.build/) and [pnpm](https://pnpm.io/).
 
 ## Structure
 
 ```
-rs-workers/
+maid-workers/
 ├── workers/
 │   └── auth        # Authentication worker (Better Auth)
 ├── packages/

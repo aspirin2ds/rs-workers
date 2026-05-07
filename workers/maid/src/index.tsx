@@ -10,6 +10,11 @@ type ChatMessage = {
   content: string;
 };
 
+/// Extended message type for the /v1/chat endpoint: user turns may include an
+/// image as a data URI (e.g. "data:image/jpeg;base64,..."). Only user-role
+/// messages may carry an image; system/assistant image fields are ignored.
+type ChatMessageWithImage = ChatMessage & { image?: string };
+
 type MaidEnv = CloudflareBindings & {
   MMCF_API_KEY?: string;
   MMCF_UPSTREAM_BASE_URL?: string;
@@ -88,6 +93,89 @@ function isChatMessage(value: unknown): value is ChatMessage {
   return validRole && typeof content === "string" && content.length > 0;
 }
 
+function isChatMessageWithImage(value: unknown): value is ChatMessageWithImage {
+  if (!isChatMessage(value)) return false;
+  const image = (value as { image?: unknown }).image;
+  return image === undefined || image === null || typeof image === "string";
+}
+
+/// Converts a ChatMessageWithImage to the Workers AI messages format.
+/// User messages with an image are expanded to a content-array with a text
+/// part + an image_url part (data URI); all other messages stay as plain strings.
+function toAIMessage(msg: ChatMessageWithImage): { role: string; content: unknown } {
+  if (msg.role === "user" && typeof msg.image === "string" && msg.image.length > 0) {
+    return {
+      role: "user",
+      content: [
+        { type: "text", text: msg.content },
+        { type: "image_url", image_url: { url: msg.image } },
+      ],
+    };
+  }
+  return { role: msg.role, content: msg.content };
+}
+
+/// Shared SSE streaming helper: pipes a Workers AI ReadableStream through a
+/// transform that normalises per-chunk SSE events to `data: {"text":"..."}` /
+/// `data: {"done":true}` and returns a streaming Response.
+function streamAIToSSE(upstream: ReadableStream<Uint8Array>): Response {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let sseBuffer = "";
+  let emittedDone = false;
+
+  function processEvent(event: string, controller: TransformStreamDefaultController<Uint8Array>) {
+    for (const rawLine of event.split("\n")) {
+      const line = rawLine.trim();
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice("data:".length).trim();
+      if (payload.length === 0) continue;
+      if (payload === "[DONE]") {
+        if (!emittedDone) {
+          controller.enqueue(encoder.encode(`data: {"done":true}\n\n`));
+          emittedDone = true;
+        }
+        continue;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(payload);
+      } catch {
+        continue;
+      }
+      const text = extractStreamingDelta(parsed);
+      if (text) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+      }
+    }
+  }
+
+  const transformer = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      sseBuffer += decoder.decode(chunk, { stream: true });
+      let boundary;
+      while ((boundary = sseBuffer.indexOf("\n\n")) !== -1) {
+        const event = sseBuffer.slice(0, boundary);
+        sseBuffer = sseBuffer.slice(boundary + 2);
+        processEvent(event, controller);
+      }
+    },
+    flush(controller) {
+      sseBuffer += decoder.decode();
+      if (sseBuffer.trim().length > 0) processEvent(sseBuffer, controller);
+      if (!emittedDone) controller.enqueue(encoder.encode(`data: {"done":true}\n\n`));
+    },
+  });
+
+  return new Response(upstream.pipeThrough(transformer), {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
 /// Per-chunk text extractor for streaming responses. Different Workers AI models emit
 /// different SSE payload shapes: simple chat models send `{ response: "delta" }`,
 /// OpenAI-compatible models (incl. Gemma) send `{ choices: [{ delta: { content: "delta" } }] }`.
@@ -161,62 +249,66 @@ app.post("/v1/generate/ssml", async (c) => {
     return c.json({ error: "Workers AI did not return a stream" }, 502);
   }
 
-  const upstream = aiResult as ReadableStream<Uint8Array>;
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let buffer = "";
-  let emittedDone = false;
+  return streamAIToSSE(aiResult as ReadableStream<Uint8Array>);
+});
 
-  function processEvent(event: string, controller: TransformStreamDefaultController<Uint8Array>) {
-    for (const rawLine of event.split("\n")) {
-      const line = rawLine.trim();
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice("data:".length).trim();
-      if (payload.length === 0) continue;
-      if (payload === "[DONE]") {
-        if (!emittedDone) {
-          controller.enqueue(encoder.encode(`data: {"done":true}\n\n`));
-          emittedDone = true;
-        }
-        continue;
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(payload);
-      } catch {
-        continue;
-      }
-      const text = extractStreamingDelta(parsed);
-      if (text) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
-      }
-    }
+/// General-purpose remote chat endpoint. Accepts a messages array where user
+/// turns may include an optional `image` field (data URI, e.g.
+/// `data:image/jpeg;base64,...`). System and assistant messages are text-only.
+/// Streams back SSE in the same `data: {"text":"..."}` / `data: {"done":true}`
+/// format as /v1/generate/ssml.
+app.post("/v1/chat", async (c) => {
+  const contentType = c.req.header("content-type") ?? "";
+  if (!contentType.toLowerCase().startsWith("application/json")) {
+    return c.json({ error: "Content-Type must be application/json" }, 400);
   }
 
-  const transformer = new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      buffer += decoder.decode(chunk, { stream: true });
-      let boundary;
-      while ((boundary = buffer.indexOf("\n\n")) !== -1) {
-        const event = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        processEvent(event, controller);
-      }
-    },
-    flush(controller) {
-      buffer += decoder.decode();
-      if (buffer.trim().length > 0) processEvent(buffer, controller);
-      if (!emittedDone) controller.enqueue(encoder.encode(`data: {"done":true}\n\n`));
-    },
-  });
+  let payload: unknown;
+  try {
+    payload = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
 
-  return new Response(upstream.pipeThrough(transformer), {
-    headers: {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-      "x-accel-buffering": "no",
-    },
-  });
+  if (!payload || typeof payload !== "object") {
+    return c.json({ error: "Body must be a JSON object" }, 400);
+  }
+
+  const rawMessages = (payload as { messages?: unknown }).messages;
+  if (!Array.isArray(rawMessages) || rawMessages.length === 0) {
+    return c.json({ error: "messages: non-empty array required" }, 400);
+  }
+
+  const messages = rawMessages.filter(isChatMessageWithImage);
+  if (messages.length !== rawMessages.length) {
+    return c.json(
+      { error: "messages: each item must have role (system|user|assistant), non-empty string content, and optional string image" },
+      400
+    );
+  }
+
+  if (messages[messages.length - 1]?.role !== "user") {
+    return c.json({ error: "messages: last item must be a user turn" }, 400);
+  }
+
+  const model = getWorkersAIModel(c.env);
+  const aiMessages = messages.map(toAIMessage);
+
+  let aiResult: unknown;
+  try {
+    aiResult = await c.env.AI.run(
+      model as Parameters<CloudflareBindings["AI"]["run"]>[0],
+      { messages: aiMessages, stream: true } as Parameters<CloudflareBindings["AI"]["run"]>[1]
+    );
+  } catch (error) {
+    return c.json({ error: (error as Error).message }, 502);
+  }
+
+  if (!(aiResult instanceof ReadableStream)) {
+    return c.json({ error: "Workers AI did not return a stream" }, 502);
+  }
+
+  return streamAIToSSE(aiResult as ReadableStream<Uint8Array>);
 });
 
 export default app;

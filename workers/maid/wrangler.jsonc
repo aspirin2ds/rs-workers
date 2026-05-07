@@ -36,8 +36,7 @@
   },
   "vars": {
     "MMCF_UPSTREAM_BASE_URL": "https://maid-aiproxy-dev.semigraph.net",
-    "OLLAMA_BASE_URL": "https://ollm23.semigraphs.com/",
-    "OLLAMA_MODEL": "gemma4:e4b"
+    "WORKERS_AI_MODEL": "@cf/google/gemma-4-26b-a4b-it"
   },
   "services": [
     {
